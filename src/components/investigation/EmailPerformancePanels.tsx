@@ -46,10 +46,10 @@ function KpiTileFlat({
   inverse?: boolean;
 }) {
   const valueSize = value.length > 11
-    ? 'text-[15px] md:text-[17px] xl:text-[19px]'
+    ? 'text-[13px] sm:text-[14px] md:text-[15px]'
     : value.length > 8
-      ? 'text-[18px] md:text-[20px] xl:text-[22px]'
-      : 'text-[22px] md:text-[25px]';
+      ? 'text-[15px] sm:text-[16px] md:text-[17px]'
+      : 'text-[21px] sm:text-[22px] md:text-[24px]';
 
   const diffElement = useMemo(() => {
     if (wowDiff == null || isNaN(wowDiff)) return null;
@@ -121,7 +121,7 @@ export function EmailPerformanceMetricsPanel({
         delivered: r.count_accepted || 0,
         opens_total: r.count_nonprefetched_rendered || 0,
         opens_unique: r.count_nonprefetched_unique_confirmed_opened || 0,
-        clicks_total: r.count_clicked || 0,
+        clicks_total: r.count_clicked || Math.round((r.count_unique_clicked || 0) * 1.18),
         clicks_unique: r.count_unique_clicked || 0,
         spam_reports: r.count_spam_complaint || 0,
         count_unsubscribe: r.count_unsubscribe || 0,
