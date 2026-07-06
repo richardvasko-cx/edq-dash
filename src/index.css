@@ -1,0 +1,937 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --color-surface-dim: #d9dadc;
+  --color-surface-container-low: #f3f4f6;
+  --color-surface-container-lowest: #ffffff;
+  --color-secondary-fixed-dim: #AECBFA;
+  --color-on-secondary-container: #174EA6;
+  --color-on-error-container: #93000a;
+  --color-primary: #1A73E8;
+  --color-heat-red: #E9371F;
+  --color-secondary-fixed: #D2E3FC;
+  --color-heat-orange: #FFA524;
+  --color-surface-purple: #F6F8FC;
+  --color-on-secondary-fixed-variant: #174EA6;
+  --color-on-surface: #202124;
+  --color-pink: #FBD3E8;
+  --color-surface: #F6F8FC;
+  --color-on-error: #ffffff;
+  --color-error-container: #ffdad6;
+  --color-on-tertiary-container: #D2E3FC;
+  --color-primary-fixed-dim: #AECBFA;
+  --color-on-secondary-fixed: #0B2E63;
+  --color-secondary-container: #8AB4F8;
+  --color-on-primary-container: #D2E3FC;
+  --color-inverse-surface: #1E1D22;
+  --color-tertiary-container: #4A6798;
+  --color-surface-container: #edeef0;
+  --color-surface-container-highest: #e1e2e4;
+  --color-surface-tint: #4285F4;
+  --color-peach: #FFD4BC;
+  --color-surface-variant: #e1e2e4;
+  --color-on-tertiary-fixed-variant: #3C5374;
+  --color-on-primary: #ffffff;
+  --color-on-tertiary: #ffffff;
+  --color-outline-variant: #E8EAED;
+  --color-primary-fixed: #D2E3FC;
+  --color-on-primary-fixed: #0B2E63;
+  --color-surface-bright: #FFFFFF;
+  --color-secondary: #1967D2;
+  --color-tertiary-fixed: #E8F0FE;
+  --color-inverse-on-surface: #f5f3f7;
+  --color-on-tertiary-fixed: #0B2E63;
+  --color-primary-container: #1A73E8;
+  --color-tertiary-fixed-dim: #AECBFA;
+  --color-background: #F6F8FC;
+  --color-on-background: #202124;
+  --color-outline: #7d7385;
+  --color-on-secondary: #ffffff;
+  --color-inverse-primary: #AECBFA;
+  --color-error: #ba1a1a;
+  --color-tertiary: #3C5374;
+  --color-on-surface-variant: #5F6368;
+  --color-surface-container-high: #e7e8ea;
+  --color-[#1A73E8]: #1A73E8;
+  --color-on-primary-fixed-variant: #1557B0;
+  
+  /* Additional presentation slide colors */
+  --color-slides-bg: #0B2E63;
+  --color-slides-number: #AECBFA;
+
+  --font-sans: "Plus Jakarta Sans", "Google Sans Flex", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", "Google Sans Flex", ui-sans-serif, system-ui, sans-serif;
+  --font-body-md: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-label-md: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-headline-md: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-headline-lg: "Outfit", ui-sans-serif, system-ui, sans-serif;
+
+  /* MD3 Shape Scale
+     XS=4px  SM=8px  MD=12px  LG=16px  XL=28px  Full=9999px
+     Mapped onto Tailwind's radius tokens so existing classes pick up MD3 values. */
+  --radius-xs:   0.25rem;   /* 4px  — MD3 Extra Small */
+  --radius-sm:   0.5rem;    /* 8px  — MD3 Small       */
+  --radius-md:   0.75rem;   /* 12px — MD3 Medium       */
+  --radius-lg:   1rem;      /* 16px — MD3 Large        */
+  --radius-xl:   1rem;      /* 16px — MD3 Large (cards) */
+  --radius-2xl:  1.75rem;   /* 28px — MD3 Extra Large (dialogs/sheets) */
+  --radius-3xl:  1.75rem;   /* 28px — cap at XL        */
+
+  /* MD3 Motion — Emphasized easing curves */
+  --ease-md3-standard:           cubic-bezier(0.2, 0.0, 0.0, 1.0);
+  --ease-md3-emphasized:         cubic-bezier(0.2, 0.0, 0.0, 1.0);
+  --ease-md3-emphasized-decel:   cubic-bezier(0.05, 0.7, 0.1, 1.0);
+  --ease-md3-emphasized-accel:   cubic-bezier(0.3, 0.0, 0.8, 0.15);
+}
+
+:root {
+  /* MD3 Color Token mapping for @material/web */
+  --md-sys-color-primary: var(--color-primary);
+  --md-sys-color-on-primary: var(--color-on-primary);
+  --md-sys-color-primary-container: var(--color-primary-container);
+  --md-sys-color-on-primary-container: var(--color-on-primary-container);
+  --md-sys-color-secondary: var(--color-secondary);
+  --md-sys-color-on-secondary: var(--color-on-secondary);
+  --md-sys-color-secondary-container: var(--color-secondary-container);
+  --md-sys-color-on-secondary-container: var(--color-on-secondary-container);
+  --md-sys-color-tertiary: var(--color-tertiary);
+  --md-sys-color-on-tertiary: var(--color-on-tertiary);
+  --md-sys-color-tertiary-container: var(--color-tertiary-container);
+  --md-sys-color-on-tertiary-container: var(--color-on-tertiary-container);
+  --md-sys-color-surface: var(--color-surface);
+  --md-sys-color-on-surface: var(--color-on-surface);
+  --md-sys-color-surface-variant: var(--color-surface-variant);
+  --md-sys-color-on-surface-variant: var(--color-on-surface-variant);
+  --md-sys-color-outline: var(--color-outline);
+  --md-sys-color-outline-variant: var(--color-outline-variant);
+  --md-sys-color-background: var(--color-background);
+  --md-sys-color-on-background: var(--color-on-background);
+  --md-sys-color-error: var(--color-error);
+  --md-sys-color-on-error: var(--color-on-error);
+  --md-sys-color-error-container: var(--color-error-container);
+  --md-sys-color-on-error-container: var(--color-on-error-container);
+
+  /* Typography / Fonts */
+  --md-ref-typeface-brand: var(--font-sans);
+  --md-ref-typeface-plain: var(--font-sans);
+}
+
+body {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-optical-sizing: auto;
+  /* Slightly heavier default body weight across the dashboard (more than normal,
+     but not bold). */
+  font-weight: 450;
+}
+
+/* App-wide minimum-size guard. Flex and grid items default to min-content,
+   which lets long labels, values, inputs, and tables push outside rounded
+   panels on narrow screens. Keep content inside its border by default. */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+#root,
+#root * {
+  min-width: 0;
+}
+
+#root :where(input, textarea, select, button) {
+  max-width: 100%;
+}
+
+#root :where(p, div, h1, h2, h3, h4, h5, h6, label, button) {
+  overflow-wrap: break-word;
+}
+
+#root :where(td, th) {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+#root :where(table) {
+  max-width: 100%;
+}
+
+#root :where(img, svg, canvas, video) {
+  max-width: 100%;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Outfit', sans-serif;
+}
+
+/* ── MD3 type scale (Material 3 Design System pack) ──────────────────────
+   Reusable role-based typography for every view. Sizes/line-heights match the
+   M3 spec; family stays on the app's existing Outfit/Plus Jakarta stack. */
+.md3-headline-small { font-family: 'Outfit', sans-serif; font-size: 24px; line-height: 32px; font-weight: 700; letter-spacing: 0; }
+.md3-title-large    { font-family: 'Outfit', sans-serif; font-size: 22px; line-height: 28px; font-weight: 700; }
+.md3-title-medium   { font-size: 16px; line-height: 24px; font-weight: 700; letter-spacing: 0.15px; }
+.md3-title-small    { font-size: 14px; line-height: 20px; font-weight: 700; letter-spacing: 0.1px; }
+.md3-label-large    { font-size: 14px; line-height: 20px; font-weight: 600; letter-spacing: 0.1px; }
+.md3-label-medium   { font-size: 12px; line-height: 16px; font-weight: 600; letter-spacing: 0.5px; }
+.md3-body-large     { font-size: 16px; line-height: 24px; font-weight: 500; }
+.md3-body-medium    { font-size: 14px; line-height: 20px; font-weight: 500; }
+.md3-body-small     { font-size: 12px; line-height: 16px; font-weight: 500; }
+/* Section eyebrow: M3 label-medium, sentence case, on-surface-variant */
+.md3-eyebrow        { font-size: 11px; line-height: 16px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; }
+
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+.material-symbols-outlined.fill {
+  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+/* Hide scrollbar utility */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* Scrollbars fade in while active, then softly disappear. */
+::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 10px;
+  transition: background-color 0.28s ease;
+}
+
+.sb-active ::-webkit-scrollbar-thumb,
+.sb-active::-webkit-scrollbar-thumb,
+.custom-scrollbar.is-scrolling::-webkit-scrollbar-thumb {
+  background-color: rgba(128, 128, 128, 0.42);
+}
+
+.sb-active ::-webkit-scrollbar,
+.sb-active::-webkit-scrollbar,
+.custom-scrollbar.is-scrolling::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.dark.sb-active ::-webkit-scrollbar-thumb,
+.dark.sb-active::-webkit-scrollbar-thumb,
+.dark .custom-scrollbar.is-scrolling::-webkit-scrollbar-thumb {
+  background-color: rgba(160, 160, 160, 0.38);
+}
+
+* {
+  scrollbar-color: transparent transparent;
+  scrollbar-width: none;
+}
+
+.sb-active *,
+.custom-scrollbar.is-scrolling {
+  scrollbar-color: rgba(128, 128, 128, 0.42) transparent;
+  scrollbar-width: thin;
+}
+
+/* Bespoke Braze formatting for rendered user guides */
+.markdown-style {
+  font-family: inherit;
+  color: #4A4B57;
+  line-height: 1.75;
+}
+
+.markdown-style p {
+  margin-top: 0;
+  margin-bottom: 1.25rem;
+  color: #4A4B57;
+}
+
+.dark .markdown-style p {
+  color: #d1d5db;
+}
+
+/* Blockquotes styled like the blue-purple left accent strip */
+.markdown-style blockquote {
+  border-left: 4px solid #1A73E8 !important;
+  background-color: rgba(128, 30, 215, 0.04) !important;
+  padding: 16px 20px !important;
+  margin: 20px 0 !important;
+  border-radius: 0 8px 8px 0;
+  color: #212123 !important;
+  font-weight: 500;
+  font-style: normal !important;
+}
+
+.dark .markdown-style blockquote {
+  background-color: rgba(128, 30, 215, 0.15) !important;
+  color: #f3f4f6 !important;
+}
+
+.markdown-style blockquote p {
+  margin-bottom: 0 !important;
+  color: inherit !important;
+}
+
+/* Square bullet lists with spacing */
+.markdown-style ul {
+  list-style-type: square !important;
+  padding-left: 20px !important;
+  margin-top: 10px !important;
+  margin-bottom: 20px !important;
+}
+
+.markdown-style li {
+  margin-bottom: 8px !important;
+  color: #4A4B57;
+}
+
+.dark .markdown-style li {
+  color: #d1d5db;
+}
+
+/* Braze standard links with solid bottom accent highlights, no default text decoration */
+.markdown-style a {
+  font-family: inherit;
+  font-weight: 700 !important;
+  color: #212123 !important;
+  text-decoration: none !important;
+  border-bottom: 2px solid #1A73E8 !important;
+  transition: all 0.15s ease-in-out !important;
+  padding-bottom: 1px;
+}
+
+.dark .markdown-style a {
+  color: #ffffff !important;
+  border-bottom-color: #1A73E8 !important;
+}
+
+.markdown-style a:hover {
+  border-bottom-color: #212123 !important;
+  color: #000000 !important;
+}
+
+.dark .markdown-style a:hover {
+  border-bottom-color: #ffffff !important;
+  color: #ffffff !important;
+}
+
+/* Tables styled exactly like the screenshot examples */
+.markdown-style table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  margin-top: 20px !important;
+  margin-bottom: 30px !important;
+  border: 1px solid #dddde2 !important;
+}
+
+.dark .markdown-style table {
+  border-color: #374151 !important;
+}
+
+.markdown-style th {
+  background-color: #f4f4f7 !important;
+  color: #212123 !important;
+  font-family: inherit;
+  font-weight: 700 !important;
+  border: 1px solid #dddde2 !important;
+  padding: 12px 16px !important;
+  text-align: left !important;
+}
+
+.dark .markdown-style th {
+  background-color: #1f2937 !important;
+  color: #f3f4f6 !important;
+  border-color: #374151 !important;
+}
+
+.markdown-style td {
+  border: 1px solid #dddde2 !important;
+  padding: 12px 16px !important;
+  color: #4A4B57 !important;
+  line-height: 1.75 !important;
+  font-size: 14px !important;
+}
+
+.dark .markdown-style td {
+  border-color: #374151 !important;
+  color: #d1d5db !important;
+}
+
+.markdown-style tr:nth-child(even) {
+  background-color: rgba(244, 244, 247, 0.3) !important;
+}
+
+.dark .markdown-style tr:nth-child(even) {
+  background-color: rgba(31, 41, 55, 0.3) !important;
+}
+
+/* Beautiful inline code blocks */
+.markdown-style code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+  font-size: 13px !important;
+  color: #5b5b5e !important;
+  background-color: #f4f4f7 !important;
+  border: 1px solid #dddde2 !important;
+  border-radius: 4px !important;
+  padding: 2px 6px !important;
+}
+
+.dark .markdown-style code {
+  color: #e5e7eb !important;
+  background-color: #1f1f2e !important;
+  border-color: #374151 !important;
+}
+
+.markdown-style pre code {
+  border: none !important;
+  padding: 0 !important;
+  background-color: transparent !important;
+}
+
+/* ── Gemini AI panel chat response styling ── */
+.ai-prose > :first-child,
+.ai-prose .prose-custom > :first-child { margin-top: 0 !important; }
+.ai-prose > :last-child,
+.ai-prose .prose-custom > :last-child { margin-bottom: 0 !important; }
+.ai-prose h2 {
+  font-size: 13px;
+  font-weight: 800;
+  margin: 14px 0 8px;
+  line-height: 1.3;
+}
+.ai-prose h3 {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  margin: 14px 0 7px;
+  line-height: 1.35;
+}
+.ai-prose p { margin: 0 0 12px; line-height: 1.58; }
+.ai-prose p + h2,
+.ai-prose p + h3,
+.ai-prose ul + h2,
+.ai-prose ul + h3,
+.ai-prose ol + h2,
+.ai-prose ol + h3 {
+  margin-top: 18px;
+}
+.ai-prose .ai-sub { font-size: 11px; opacity: 0.55; font-weight: 600; }
+.ai-prose strong { font-weight: 700; }
+.ai-prose ul {
+  margin: 6px 0 12px;
+  padding: 8px 10px 8px 10px;
+  list-style: none;
+  background: rgba(26, 115, 232, 0.07);
+  border-radius: 12px;
+}
+.ai-prose ul li {
+  position: relative;
+  padding-left: 16px;
+  margin-bottom: 5px;
+  line-height: 1.5;
+}
+.ai-prose ul li:last-child { margin-bottom: 0; }
+.ai-prose ul li::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 7px;
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: #1A73E8;
+}
+/* Nested lists — no double background */
+.ai-prose ul ul {
+  background: none;
+  border-radius: 0;
+  padding: 4px 0 0 0;
+  margin: 4px 0 0 0;
+}
+.ai-prose blockquote {
+  margin: 6px 0 10px;
+  padding: 6px 10px;
+  border-left: 3px solid #1A73E8;
+  border-radius: 6px;
+  font-style: normal;
+}
+.ai-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 4px 0 10px;
+  font-size: 11px;
+}
+.ai-prose th {
+  text-align: left;
+  font-weight: 700;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 5px 8px;
+  opacity: 0.6;
+}
+.ai-prose td {
+  padding: 5px 8px;
+  border-top: 1px solid;
+}
+.ai-prose td:last-child { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+/* Ordered lists (e.g. Recommended Actions next steps) — circular number badges,
+   matching the Overview "Suggested Next Steps" look. */
+.ai-prose ol {
+  margin: 6px 0 12px;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ai-prose ol > li {
+  counter-increment: step;
+  position: relative;
+  padding-left: 32px;
+  margin: 0;
+  line-height: 1.5;
+}
+.ai-prose ol > li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 9999px;
+  background: #E8F0FE;
+  color: #1A73E8;
+  font-size: 11px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ai-prose-dark ol > li::before { background: rgba(26,115,232,0.22); color: #8AB4F8; }
+/* Inline code & code blocks — must WRAP, not overflow, so long tokens like
+   "selector._domainkey.yourdomain" or "550 5.7.26 ..." don't break the layout. */
+.ai-prose code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  background: rgba(0, 0, 0, 0.06);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.ai-prose pre {
+  margin: 4px 0 8px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.ai-prose pre code { background: none; padding: 0; font-size: 0.85em; }
+
+/* dark variant */
+.ai-prose-dark blockquote { background: rgba(26,115,232,0.12); color: rgba(255,255,255,0.8); }
+.ai-prose-dark table { background: rgba(255,255,255,0.04); border-radius: 8px; overflow: hidden; }
+.ai-prose-dark td { border-color: rgba(255,255,255,0.08); }
+.ai-prose-dark code { background: rgba(255,255,255,0.1); }
+.ai-prose-dark pre { background: rgba(255,255,255,0.08); }
+
+/* light variant */
+.ai-prose-light blockquote { background: rgba(26,115,232,0.08); color: #1D192B; }
+.ai-prose-light table { background: rgba(0,0,0,0.025); border-radius: 8px; overflow: hidden; }
+.ai-prose-light td { border-color: rgba(0,0,0,0.07); }
+
+/* ── Gemini "generating" skeleton shimmer (matches Gemini overlay animation) ── */
+.gemini-skel {
+  height: 9px;
+  border-radius: 9999px;
+  /* Symmetric gradient (same colour at 0% and 100%) tiled horizontally so the
+     sweep loops with no visible seam — continuous flow. */
+  background-image: linear-gradient(
+    90deg,
+    rgba(26,115,232,0.12) 0%,
+    rgba(66,133,244,0.55) 25%,
+    #1A73E8 50%,
+    rgba(66,133,244,0.55) 75%,
+    rgba(26,115,232,0.12) 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: repeat-x;
+  animation: gemini-shimmer 1.8s linear infinite;
+}
+@keyframes gemini-shimmer {
+  from { background-position: 0% 0; }
+  to   { background-position: -200% 0; }
+}
+.gemini-twinkle {
+  /* Full 360° rotation that eases in and out, so it slows as it approaches
+     each turn, then accelerates again on the next. */
+  animation: gemini-twinkle 2.4s ease-in-out infinite;
+  transform-origin: center;
+}
+@keyframes gemini-twinkle {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+/* Cycling status words that rise up from the bottom with a bouncy overshoot */
+.gemini-think-word {
+  animation: gemini-think-rise 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes gemini-think-rise {
+  0%   { transform: translateY(120%); opacity: 0; }
+  55%  { opacity: 1; }
+  100% { transform: translateY(0);    opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gemini-skel { animation-duration: 3.5s; }
+  .gemini-twinkle { animation: none; }
+  .gemini-think-word { animation: none; }
+}
+
+/* ── Gemini panel: comet tracing clockwise once on open ── */
+@property --gem-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+.gemini-glow-border,
+.gemini-glow-border::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  border-radius: var(--radius-2xl, 1.75rem);
+  /* Gemini gradient: blue → violet → pink → coral — matches Gemini brand sweep */
+  background: conic-gradient(from var(--gem-angle),
+    #4285F4, #7C3AED, #DB2777, #F97316, #4285F4);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0;
+}
+.gemini-glow-border {
+  padding: 2px;
+  filter: blur(4px) saturate(1.5) brightness(1.1);
+  animation: gemini-glow-edges 1.4s ease-out forwards;
+}
+.gemini-glow-border::after {
+  padding: 26px;
+  filter: blur(32px) saturate(1.8) brightness(1.2);
+  opacity: 0;
+  animation: gemini-glow-bloom 1.4s ease-out forwards;
+}
+@keyframes gemini-glow-edges {
+  0%   { --gem-angle: 0deg;   opacity: 0; }
+  8%   { opacity: 1; }
+  75%  { opacity: 1; }
+  100% { --gem-angle: 360deg; opacity: 0; }
+}
+@keyframes gemini-glow-bloom {
+  0%   { --gem-angle: 0deg;   opacity: 0; }
+  10%  { opacity: 1; }
+  75%  { opacity: 1; }
+  100% { --gem-angle: 360deg; opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gemini-glow-border, .gemini-glow-border::after { animation: none; opacity: 0; }
+}
+
+/* ── Gemini Pill: one-shot border sweep (inside pill div, tracks pill size) ── */
+.gemini-pill-glow-border,
+.gemini-pill-glow-border::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: var(--pill-glow-radius, 9999px);
+  background: conic-gradient(from var(--gem-angle),
+    #4285F4, #7C3AED, #DB2777, #F97316, #4285F4);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0;
+  transition: border-radius 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.gemini-pill-glow-border {
+  padding: 1.5px;
+  filter: blur(1px) saturate(1.4) brightness(1.0);
+  animation: gemini-glow-edges 1.4s ease-out forwards;
+}
+.gemini-pill-glow-border::after {
+  padding: 10px;
+  filter: blur(14px) saturate(1.6) brightness(1.1);
+  opacity: 0;
+  animation: gemini-glow-bloom 1.4s ease-out forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .gemini-pill-glow-border, .gemini-pill-glow-border::after { animation: none; opacity: 0; }
+}
+
+/* ── Gemini Pill: continuous perimeter sweep while generating in background ── */
+.gemini-pill-loading-glow,
+.gemini-pill-loading-glow::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: 9999px;
+  background: conic-gradient(from var(--gem-angle),
+    #4285F4, #7C3AED, #DB2777, #F97316, #4285F4);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask-composite: exclude;
+  pointer-events: none;
+}
+.gemini-pill-loading-glow {
+  padding: 1.5px;
+  filter: blur(0.5px) saturate(1.6) brightness(1.1);
+  animation: gemini-loading-sweep 1.8s linear infinite;
+}
+.gemini-pill-loading-glow::after {
+  padding: 8px;
+  filter: blur(10px) saturate(1.8) brightness(1.2);
+  opacity: 0.7;
+  animation: gemini-loading-sweep 1.8s linear infinite;
+}
+@keyframes gemini-loading-sweep {
+  from { --gem-angle: 0deg; }
+  to   { --gem-angle: 360deg; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gemini-pill-loading-glow, .gemini-pill-loading-glow::after { animation: none; opacity: 0.4; }
+}
+
+/* ── Get Started panel: Gemini-style glow while the CTA button is hovered ── */
+.getstarted-glow,
+.getstarted-glow::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: 0.75rem;
+  background: conic-gradient(from var(--gem-angle),
+    #4285F4, #7C3AED, #DB2777, #F97316, #4285F4);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.getstarted-glow { padding: 2px; filter: blur(2px) saturate(1.5) brightness(1.1); }
+.getstarted-glow::after { padding: 16px; filter: blur(22px) saturate(1.8) brightness(1.2); }
+.getstarted-panel:has(.getstarted-cta:hover) .getstarted-glow {
+  opacity: 1;
+  animation: gemini-loading-sweep 1.8s linear infinite;
+}
+.getstarted-panel:has(.getstarted-cta:hover) .getstarted-glow::after {
+  opacity: 0.6;
+  animation: gemini-loading-sweep 1.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .getstarted-panel:has(.getstarted-cta:hover) .getstarted-glow,
+  .getstarted-panel:has(.getstarted-cta:hover) .getstarted-glow::after { animation: none; }
+}
+
+.ai-prose .app-action-inline-chip,
+.prose-custom .app-action-inline-chip,
+button.app-action-inline-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 100%;
+  min-height: 1.86em;
+  margin: 0 0.08em;
+  padding: 0.14em 0.68em;
+  border: 1px solid #1A73E8 !important;
+  border-radius: 999px;
+  background: #1A73E8 !important;
+  color: #FFFFFF !important;
+  font: inherit;
+  font-weight: 800;
+  line-height: 1.05;
+  vertical-align: -0.12em;
+  box-shadow: none !important;
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+  cursor: pointer;
+}
+
+.ai-prose .app-action-inline-chip:hover,
+.prose-custom .app-action-inline-chip:hover,
+button.app-action-inline-chip:hover {
+  background: #1669D6 !important;
+  border-color: #1669D6 !important;
+}
+
+.ai-prose .app-action-inline-chip:active,
+.prose-custom .app-action-inline-chip:active,
+button.app-action-inline-chip:active {
+  transform: translateY(1px);
+}
+
+.ai-prose .app-action-inline-icon,
+.prose-custom .app-action-inline-icon {
+  font-size: 1em;
+  line-height: 1;
+  color: #FFFFFF !important;
+}
+
+.app-action-inline-dark .app-action-inline-chip,
+.app-action-inline-light .app-action-inline-chip {
+  background: #1A73E8 !important;
+  border-color: #1A73E8 !important;
+  color: #FFFFFF !important;
+}
+
+.app-action-inline-dark .app-action-inline-chip:hover,
+.app-action-inline-light .app-action-inline-chip:hover {
+  background: #1669D6 !important;
+  border-color: #1669D6 !important;
+}
+
+/* Global context capture — outline explicit panels without changing their colours. */
+.gem-selector-active [data-gem-panel] {
+  cursor: pointer !important;
+  outline: 2px dashed rgba(26, 115, 232, 0.45);
+  outline-offset: 3px;
+  border-radius: 12px;
+  transition: outline-color 0.15s;
+}
+
+.gem-selector-active [data-gem-panel]:hover {
+  outline-color: rgba(26, 115, 232, 0.9);
+}
+
+.gem-selector-active [data-gem-panel] [data-gem-panel] {
+  cursor: default !important;
+  outline: none !important;
+}
+
+/* Views should respond to the content column they actually have, especially
+   when Gemini is open and the remaining workspace is narrower than the window. */
+.app-responsive-scope {
+  container-type: inline-size;
+}
+
+.app-responsive-scope .grid > * {
+  min-width: 0;
+}
+
+.cases-table-wrap table :where(th, td) {
+  white-space: nowrap;
+}
+
+.cases-table-wrap table td:nth-child(3) {
+  white-space: normal;
+}
+
+@container (max-width: 720px) {
+  .cases-table-wrap {
+    display: none;
+  }
+
+  .cases-mobile-list {
+    display: block;
+  }
+}
+
+@container (max-width: 980px) {
+  .app-responsive-scope .grid.lg\:grid-cols-2,
+  .app-responsive-scope .grid.lg\:grid-cols-3,
+  .app-responsive-scope .grid.lg\:grid-cols-4,
+  .app-responsive-scope .grid.xl\:grid-cols-2,
+  .app-responsive-scope .grid.xl\:grid-cols-3,
+  .app-responsive-scope .grid.xl\:grid-cols-4,
+  .app-responsive-scope .grid.\32xl\:grid-cols-2,
+  .app-responsive-scope .grid.\32xl\:grid-cols-3,
+  .app-responsive-scope .grid.\32xl\:grid-cols-4 {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+@container (max-width: 760px) {
+  .app-responsive-scope .grid.sm\:grid-cols-2,
+  .app-responsive-scope .grid.sm\:grid-cols-3,
+  .app-responsive-scope .grid.md\:grid-cols-2,
+  .app-responsive-scope .grid.md\:grid-cols-3,
+  .app-responsive-scope .grid.md\:grid-cols-4 {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+@container (max-width: 680px) {
+  .app-responsive-scope .grid.grid-cols-2.gap-3,
+  .app-responsive-scope .grid.grid-cols-2.gap-4,
+  .app-responsive-scope .grid.grid-cols-2.gap-5,
+  .app-responsive-scope .grid.grid-cols-2.gap-6,
+  .app-responsive-scope .grid.grid-cols-2.gap-8,
+  .app-responsive-scope .grid.grid-cols-3.gap-3,
+  .app-responsive-scope .grid.grid-cols-3.gap-4,
+  .app-responsive-scope .grid.grid-cols-3.gap-5,
+  .app-responsive-scope .grid.grid-cols-3.gap-6,
+  .app-responsive-scope .grid.grid-cols-3.gap-8,
+  .app-responsive-scope .grid.grid-cols-4.gap-3,
+  .app-responsive-scope .grid.grid-cols-4.gap-4,
+  .app-responsive-scope .grid.grid-cols-4.gap-5,
+  .app-responsive-scope .grid.grid-cols-4.gap-6,
+  .app-responsive-scope .grid.grid-cols-4.gap-8 {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+/* IP Warming uses available content width, not viewport width, so it still
+   stacks when the Gemini side panel narrows the workspace. */
+.ipw-planner {
+  container-type: inline-size;
+}
+
+.ipw-results-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.5rem;
+}
+
+.ipw-results-grid > section {
+  min-width: 0;
+}
+
+@container (max-width: 900px) {
+  .ipw-results-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ── MD3 State Layers ── */
+.md3-state-layer {
+  position: relative;
+  overflow: hidden;
+}
+.md3-state-layer::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-color: currentColor;
+  opacity: 0;
+  transition: opacity 150ms cubic-bezier(0.2, 0, 0, 1);
+  pointer-events: none;
+  z-index: 0;
+}
+.md3-state-layer:hover::before {
+  opacity: 0.08;
+}
+.md3-state-layer:focus-visible::before {
+  opacity: 0.10;
+}
+.md3-state-layer:active::before {
+  opacity: 0.10;
+}

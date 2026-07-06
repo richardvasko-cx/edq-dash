@@ -1,0 +1,290 @@
+# Frequently asked questions
+
+> This article provides answers to some frequently asked questions about Canvas.
+
+## Building and editing Canvas
+
+### How many steps I can include in a Canvas?
+
+You can add up to 200 steps in a Canvas.
+
+### What's the difference between a component and a step?
+
+A [component](https://www.braze.com/docs/user_guide/messaging/canvas/canvas_components/about/) is an individual part of your Canvas that you can use to determine the effectiveness of your Canvas. Components can include actions such as splitting your user journey, adding a delay, and even testing multiple Canvas paths. A step in Canvas refers to the personalized user journey in your Canvas branches. Essentially, your Canvas is made of individual components that create steps for your user journey.
+
+### Can I launch a Canvas with disconnected steps?
+
+Yes. You can also save Canvases post-launch with disconnected steps. 
+
+### Where do users go when they've reached a disconnected step?
+
+If a user is in a disconnected step of your Canvas workflow, they will advance to the subsequent step if there is one, and the step's setting will dictate how the user should advance. This is intended to allow users to make changes to steps without having to directly connect them to the rest of the Canvas. This also gives you some room for testing before going live immediately, effectively allowing for saving a draft.
+
+We recommend checking the analytics view for users pending in a Canvas step before disconnecting a step.
+
+### What happens if the audience and send time are identical for a Canvas that has one variant, but multiple branches?
+
+We enqueue a job for each step—they run at around the same time, and one of them "wins". In practice, this may be sorted somewhat evenly, but it's likely to have at least a slight bias toward the step that was created first. 
+
+Moreover, we can't make any guarantees about exactly what that distribution will look like. If you want an even split, add a [Random Bucket Number](https://www.braze.com/docs/user_guide/messaging/ab_testing/concepts/random_bucket_numbers/) filter.
+
+### How are Canvas audiences evaluated? 
+
+By default, filters and segments for full steps in the Canvas are checked at send time. The Decision Split step performs an evaluation right after receiving a previous step (or before a delay).
+
+### When does an exception event trigger?
+
+Exception events only trigger while the user is waiting to receive the Canvas component it's associated with. If a user performs an action in advance, the exception event will not trigger. If you want to exclude users who have performed a certain event in advance, use [filters](https://www.braze.com/docs/user_guide/audience/segments/segmentation_filters/) instead.
+
+### How does editing a Canvas affect users already in the Canvas?
+
+If you edit some of the steps of a multi-step Canvas, users who were already in the audience but have not received the steps will receive the updated version of the message. Note that this will only happen if they haven't been evaluated for the step yet.
+
+For more information on what you can edit after launch, refer to [Changing your Canvas after launch](https://www.braze.com/docs/post-launch_edits/).
+
+### What happens when you stop a Canvas?
+
+When you stop a Canvas, the following applies:
+
+- Users will be prevented from entering the Canvas.
+- No further messages will be sent out, despite where a user is in the flow.
+- **Exception:** Canvases with emails will not immediately stop. After the send requests go to SendGrid, there is nothing we can do to stop them from being delivered to the user.
+
+### Should I build one Canvas or separate Canvases per user lifecycle?
+
+Depending on what you’re looking to accomplish with your Canvas, you may need different approaches in how you build your user journey. The flexibility of Canvas allows you to map user journeys for any stage of the user lifecycle. Check out our [Braze Canvas templates](https://www.braze.com/docs/user_guide/messaging/templates/canvas_templates/braze_templates) for several examples of streamlined approaches to creating effective user journeys.
+
+## Messages and delivery
+
+### When are in-app messages in Canvas sent?
+
+In-app messages are sent upon the next session start. This means if the user enters the Canvas step before the Canvas is stopped, they'll still receive the in-app message upon their next session start as long as the in-app message hasn't expired yet.
+
+It's possible for a user to start a session before the Canvas is stopped, but not be shown the in-app message immediately. This can occur if the in-app message is triggered by a custom event or is delayed. This means it's possible for a user to log an in-app message impression and "receive" the in-app message after the Canvas is stopped. However, the user would have had to start the session before the Canvas was stopped, but **after** they received the Canvas step.
+
+**Note:**
+
+
+Stopping a Canvas won't cause users who are waiting to receive messages to exit the user journey. If you re-enable the Canvas and users are still waiting for the message, they'll receive it (unless the time they should've been sent the message has passed, then they won't receive it).
+
+
+
+### Why may a Canvas show zero Sends even though impressions are logged?
+
+If _Messages sent_ are always zero for a Canvas containing an in-app message step, this is because in-app message delivery works differently from other messaging channels.
+
+In-app messages are "pulled" by the SDK, rather than "pushed" from Braze. In-app messages for eligible users are delivered automatically on session start and "wait" for the trigger event before displaying. Because eligible users receive the message when they start a session, Braze doesn't report this as a send event. When users perform the trigger event, the message displays and Braze logs an impression and marks the Canvas step (or campaign) as received on the user profile. Consequently, the _Sends_ total will be zero for in-app messages.
+
+### Can I schedule different send times for each variant in the same Canvas Message step or multivariate send?
+
+No. Variants in the same multivariate configuration or Message step share one delivery schedule. You can't assign one variant to send at 6 pm and another at 7 pm for that same scheduled send.
+
+To stagger sends or use different times per path, try the following methods:
+
+- Separate Message steps with Delay steps between them so each message has its own schedule.
+- Branches or an [Experiment Paths](https://www.braze.com/docs/user_guide/messaging/canvas/canvas_components/experiment_step/) step so users follow paths with different timing.
+- Separate campaigns if the use case doesn't need to stay inside one Canvas.
+
+For multivariate and A/B concepts in campaigns, see [Multivariate and A/B testing](https://www.braze.com/docs/user_guide/messaging/ab_testing/).
+
+### What happens if a user is global frequency capped at a Canvas Message step?
+
+They don't receive that send for the capped channel, but Message steps still advance users when a message isn't sent because of global frequency capping. For the step-by-step advancement cases, see [How users advance](https://www.braze.com/docs/user_guide/messaging/canvas/canvas_components/message_step/#how-users-advance). Global frequency capping alone doesn't exit users from a Canvas; that behavior is separate from **Delivery validations** on a Message step. For more detail, see [Rate limiting and frequency capping](https://www.braze.com/docs/user_guide/messaging/messaging_fundamentals/frequency_capping/).
+
+### Why are sends lower than the estimated audience size?
+
+Sends can be lower than the **Estimated audience** for many of the same reasons as [campaigns](https://www.braze.com/docs/user_guide/messaging/campaigns/faq/#why-are-sends-lower-than-the-estimated-audience-size), including frequency caps, strict device or browser filters, re-eligibility windows, rate limiting, and channel-level exclusions (for example, push reachability or email subscription and deliverability checks).
+
+Canvas-specific factors also apply:
+
+- **Action-based or API-triggered entry:** Users only enter (and receive steps) after they perform the entry behavior, so realized sends trail the upfront estimate until those actions occur.
+- **Audience Paths:** Users are routed to the highest-priority branch they qualify for, so downstream branches may receive fewer users than a flat segment count suggests.
+- **Audience and send-time checks:** Full steps re-evaluate filters at send time unless you configure otherwise. Users who qualified when the Canvas was built may drop out before a message sends.
+- **Control groups:** Global or Canvas control groups withhold a share of entrants from messaging.
+- **Quiet Hours and delays:** Messages can be held or rescheduled, shifting sends out of the reporting window you're viewing.
+- **Maximum entry or audience caps:** Entry or send caps stop additional users even when the underlying segment is larger.
+- **Reporting window:** The analytics range may not include every send you're comparing to the estimate.
+
+### Why is _Unique Recipients_ higher than the number of users I targeted?
+
+_Unique Recipients_ can be higher than the audience you expected because Braze tracks **unique daily recipients** for Canvas and campaign reporting. That supports accurate conversion attribution each time a user receives a message in the journey.
+
+For example, if a user receives a Canvas step on Monday and again on Friday and converts after each send, Braze can count two recipient rows and two in-scope conversions. With recurring entries or re-eligibility, the same small set of profiles can produce multiple _Unique Recipients_ over several days.
+
+## Analytics and conversions
+
+### How are user conversions tracked in a Canvas?
+
+A user can only convert once per Canvas entry. Conversions are assigned to the most recent message received by the user for that entry. The summary block at the beginning of a Canvas reflects all conversions performed by users within that path, whether or not they received a message. Each subsequent step will only show conversions that happened while that was the most recent step the user received.
+
+**Note:**
+
+
+When a user re-enters a Canvas, conversion events are only tracked for the most recent entry. Conversion events are not logged for previous entries, even if the conversion event is backfilled.
+
+
+
+**Expand for examples**
+
+
+
+**Example 1**
+
+There is a Canvas path with 10 push notifications and the conversion event is "session start" ("Opens App"):
+
+- User A opens the app after entering but before receiving the first message.
+- User B opens the app after each push notification.
+
+**Result:** The summary will show two conversions while the individual steps will show a conversion of one on the first step and zero for all subsequent steps.
+
+**Note:**
+
+
+If Quiet Hours is active when the conversion event happens, the same rules apply.
+
+
+
+**Example 2**
+
+There is a one-step Canvas with Quiet Hours enabled:
+
+1. User enters the Canvas.
+2. The first step doesn't have a delay, but is within the set Quiet Hours, so the message is suppressed.
+3. User performs the conversion event.
+
+**Result:** The user will count as converted in the overall Canvas variant, but not the step since they didn't receive the step.
+
+
+
+
+### What's the difference between the different conversion rate types?
+
+- Total Canvas conversions reflect how many unique users completed a conversion event, not how many conversions they each completed. 
+- Variant conversion rate or summary block at the beginning of a Canvas reflects all conversions performed by users within that path, whether or not they received a message, as an aggregate total. 
+- Step conversion rate reflects how many individuals received that message step and completed any of the outlined conversion events.
+
+### Why is my Canvas step conversion rate not equal to my Canvas variant total conversion rate?
+
+It is common for a Canvas variant's conversion total to be greater than the sum of its step total. This occurs because a user can perform a conversion event for a variant as soon as they enter the variant. However, this same conversion event doesn't count toward a Canvas step. So any user who enters the Canvas and performs the conversion event before receiving the first Canvas step is counted toward the variant conversion total and not toward the step total. The same is true for a user who enters the Canvas but exits the Canvas before receiving any step.
+
+Note that it is also possible for a user to enter a variant, not be sent any message from a step, and then convert. In this case, a conversion is not logged at the step level. However, because the user did technically convert, a conversion is logged at the Canvas level. 
+
+### How can I confirm if my users received an API-triggered Canvas?
+
+You can [create a segment](https://www.braze.com/docs/user_guide/audience/segments/creating_a_segment/) using a Canvas filter to confirm whether users entered the Canvas or received a specific Canvas step. For example, use a Canvas entry filter if you want to confirm that users entered the API-triggered Canvas, or a received step filter if you want to confirm that they received a message from the Canvas. Then, use the [`/users/export/segment` endpoint](https://www.braze.com/docs/api/endpoints/export/user_data/post_users_segment/) to export the users in that segment.
+
+### Can I delete a Canvas?
+
+No, but you can [archive a Canvas](https://www.braze.com/docs/user_guide/messaging/governance/archiving/).
+
+### How can I view analytics for each of my Canvas components?
+
+To view the analytics of a Canvas component, go to your Canvas and scroll down the **Canvas Details** page. Here, you can view each component's analytics. Check out [Canvas analytics](https://www.braze.com/docs/user_guide/messaging/canvas/testing_canvases/measuring_and_testing_with_canvas_analytics/) for more details.
+
+### When looking at the number of unique users, is Canvas analytics or the segmenter more accurate?
+
+The segmenter is a more accurate statistic for unique user data versus Canvas or campaign stats. This is because Canvas and campaign statistics are numbers that Braze increments when something happens—which means there are variables that could result in this number being different than that of the segmenter. For example, users can convert more than once for a Canvas or campaign.
+
+### Why does the number of users entering a Canvas not match the expected number?
+
+The number of users entering a Canvas may differ from your expected number because of how audiences and triggers are evaluated. In Braze, an audience is evaluated before the trigger (unless using a [change in attribute](https://www.braze.com/docs/user_guide/messaging/campaigns/schedule_your_campaign/triggered_delivery/attribute_triggers#change-custom-attribute-value) trigger). This will cause users to drop out of the Canvas if not part of your selected audience before any trigger actions are evaluated.
+
+### What happens to anonymous users during their Canvas journey?
+
+While anonymous users can enter and exit Canvases, their actions aren't associated with a specific user profile until they're identified, so their interactions may not be fully tracked in your analytics. You can use the [Query Builder](https://www.braze.com/docs/user_guide/analytics/reports/query_builder/) to generate a report of these metrics.
+
+**Tip:**
+
+
+For further assistance with Canvas troubleshooting, be sure to contact Braze Support within 30 days of your issue's occurrence as we only have the last 30 days of diagnostic logs.
+
+
+
+### Can I exclude users who are currently in a Canvas journey from a campaign or segment?
+
+Use [segmentation filters](https://www.braze.com/docs/user_guide/audience/segments/segmentation_filters/) such as `Entered Canvas Variation`, `In Canvas Control Group`, or `Received Message from Canvas Step` to target users based on Canvas entry, variant assignment, or step engagement. These filters evaluate entry history and interactions—they don't indicate whether a user is still progressing through an active journey.
+
+To include or exclude users based on active Canvas participation, add [User Update](https://www.braze.com/docs/user_guide/messaging/canvas/canvas_components/user_update/) steps at Canvas entry and exit to set and clear custom attributes, then filter on those attributes in campaigns or segments.
+
+## Segmentation
+
+### What is the difference between "Has not entered Canvas variation" and "Is not in Canvas control group"?
+
+Refer to [Segmentation Filters](https://www.braze.com/docs/user_guide/audience/segments/segmentation_filters/) for full filter definitions.
+
+#### Has not entered Canvas variation
+
+The user never entered a variation path of a specific Canvas. All users who aren't in the control group are included, regardless of whether they have entered the Canvas. This includes users who entered another variation and users who haven't entered any variation. 
+
+#### Is not in Canvas control group
+
+The user entered the Canvas, but isn't in the control group and consequently received a variation. This only includes users who entered the Canvas.
+
+Note that variation assignment occurs at Canvas entry. If a user hasn't entered a Canvas, they won't be assigned any variant. In other words, they won't be in the control group or a variant.
+
+## Original Canvas editor
+
+**Expand for original Canvas editor FAQs**
+
+
+
+### How do I convert an existing Canvas from the original editor to the current editor?
+
+You can [clone your Canvas](https://www.braze.com/docs/cloning_canvases/). This creates a copy of your original Canvas in the most current Canvas workflow.
+
+### What are the main differences between the current and original Canvas editors?
+
+#### Canvas component toolbar
+
+Previously with the original Canvas editor, a full step was added by default whenever you created any step in your user journey. These full steps are replaced by different Canvas components, which gives you the benefit of increased visibility and customization for your editing experience. You can immediately see all your Canvas components from the Canvas Step Toolbar.
+
+#### Step behavior
+
+Previously, each full step included information such as delay and schedule settings, exception events, audience filters, message configuration, and message advancement options all in one component. These are separate settings in the current editor to make your Canvas building experience more customizable and introduces some differences in functionality.
+
+#### Message component advancement
+
+[Message components](https://www.braze.com/docs/user_guide/messaging/canvas/canvas_components/message_step/) advance all users who enter the step. There is no requirement to specify message advancement behavior, making configuring the overall step simpler. If you want to implement the **Advance when message sent** option, add a separate Audience Paths to filter users that didn't receive the previous step.  
+
+#### Delay "in" behavior
+
+[Delay components](https://www.braze.com/docs/user_guide/messaging/canvas/canvas_components/delay_step/) will wait the entire delay time before proceeding to the next step. 
+
+Let's say on April 12 we have a Delay component where the delay is set to send your user to the next step in one day at 2 pm. A user enters the component at 2:01 pm on April 13. 
+- For the original workflow, the user would proceed to the next step at 2 pm on April 14, which is less than one day from the entry time. 
+- In the current editor, the user would proceed to the next step at 2 pm on April 15. Note that this is the same time, but more than one day from the entry time. 
+
+#### Intelligent Timing behavior
+
+Since [Intelligent Timing](https://www.braze.com/docs/user_guide/brazeai/intelligence_suite/intelligent_timing/) is stored in the Message component, delays will be applied prior to Intelligent Timing calculations. This means that, depending on when a user enters the component, they may receive the message later than they would in a Canvas built with the original Canvas workflow.
+
+Let's say your delay is set for 2 days, Intelligent Timing is turned on, and it has determined that the best time to send your message is 2 pm. A user enters the Delay step at 2:01 pm.
+- **Current workflow:** It will take 48 hours for the delay to pass, so the user receives the message on the third day at 2 pm.
+- **Original workflow:** The user receives the message on the second day at 2 pm.
+
+Note that if Intelligent Timing is turned on, the message will be sent within 24 hours of the user entering the Message component at the intelligent time identified (even if no Delay component is involved).
+
+#### Exception events
+
+##### Quiet Hours
+
+Exception event is applied using Action Paths, which are separate from Message steps. Quiet Hours are enforced in the Message component. This means that if a user already passed the Action Path (and wasn't excluded with the exception event), then encounters Quiet Hours when they got to the Message component, and had their Canvas configured such that the message re-sends after the Quiet Hours period, the exception event will no longer be applied. Note that this use case is not common.
+
+For segments and filters, the Message step has delivery validations that allows users to configure additional segments and filters that are validated at send-time. This prevents the aforementioned Quiet Hours edge case.
+
+##### "In" or "On the next" schedule setting
+
+Exception events are created using Action Paths. Action Paths only support "after an X time window" and not "in X time" or "on the next X time".
+
+
+
+
+### What should I include when submitting a support ticket for a "Request Timed Out" error?
+
+If you encounter a "Request Timed Out" error while editing a Canvas and need to contact [Braze Support](https://www.braze.com/docs/braze_support/), include the following information to help speed up resolution:
+
+- **Screen recording:** A recording of the steps you took before seeing the error, including any page transitions.
+- **Timestamp and time zone:** The exact time the error occurred and your time zone.
+- **Browser and version:** The browser you're using (for example, Chrome 120, Safari 17) and whether you've tried reproducing the error in a different browser.
+- **Steps to reproduce:** A clear description of the actions that trigger the error, including any specific Canvas steps or configurations involved.
+- **Network logs (optional):** Open your browser developer tools (**Network** tab), reproduce the error, and export the network log as an HTTP Archive (HAR) log file. This helps the support team identify which API call is timing out.

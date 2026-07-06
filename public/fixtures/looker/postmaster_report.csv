@@ -1,0 +1,10 @@
+activity_date,domain,domain_reputation,spf_success_ratio,dkim_success_ratio,dmarc_success_ratio,ip_reputations_bad_num,ip_reputations_low_num,ip_reputations_medium_num,ip_reputations_high_num
+2026-06-16,mail.tesco.com,MEDIUM,0.99,0.99,0.99,1,2,2,2
+2026-06-17,email.morrisons.com,MEDIUM,0.99,0.99,0.99,0,1,2,3
+2026-06-18,mail.waitrose.com,BAD,0.54,0.99,0.55,3,2,0,0
+2026-06-18,mail.sainsburys.co.uk,MEDIUM,0.99,0.99,0.99,1,2,2,2
+2026-06-20,mail.greggs.co.uk,HIGH,0.99,0.99,0.99,0,1,1,5
+2026-06-20,mail.coop.co.uk,LOW,0.99,0.04,0.04,2,3,1,0
+2026-06-21,mail.iceland.co.uk,HIGH,0.99,0.99,0.99,0,0,1,6
+2026-05-28,mail.lidl.co.uk,HIGH,0.99,0.99,0.99,0,1,1,5
+2026-06-03,mail.marksandspencer.com,LOW,0.99,0.99,0.99,1,3,2,1

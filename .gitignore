@@ -1,0 +1,14 @@
+
+!.env.example
+.DS_Store
+.env
+.env.*
+.env*
+.git_backup/
+.venv/
+*.log
+build/
+coverage/
+dist/
+node_modules/
+server.pid

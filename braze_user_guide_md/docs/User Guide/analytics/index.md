@@ -1,0 +1,1 @@
+Use **Dashboards** for at-a-glance performance monitoring, **Reports** for deeper analysis across campaigns and Canvases, and **Tracking** to configure how Braze captures user actions. If you're not sure what a specific metric means, check the **Metrics glossary**.

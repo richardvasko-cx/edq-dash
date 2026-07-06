@@ -1,0 +1,127 @@
+# Event delivery semantics
+
+> This page outlines and defines how Currents manages the flat file event data we send to Data Warehouse Storage partners.
+
+Currents for Data Storage is a continuous stream of data from our platform to a storage bucket on one of our data warehouse [partner connections](https://www.braze.com/docs/user_guide/data/distribution/braze_currents/setting_up_currents/available_partners/). Currents writes Avro files to your storage bucket at regular thresholds, allowing you to process and analyze the event data with your own Business Intelligence (BI) toolset.
+
+**Important:**
+
+
+This content **only applies to the flat file event data we send to Data Warehouse Storage partners (Google Cloud Storage, Amazon S3, and Microsoft Azure Blob Storage)**. <br><br>For content that applies to other partners, refer to our list of [available partners](https://www.braze.com/docs/user_guide/data/distribution/braze_currents/setting_up_currents/available_partners/) and check their respective pages.
+
+
+
+## Test events
+
+When you set up a Currents integration, click **Send Test Events** to verify the connection with your storage bucket. These test events validate that your integration can receive and process data correctly.
+
+**Important:**
+
+
+**Test event data format:** Test events contain placeholder values that match the correct data types for each field, but they don't contain realistic or accurate data. For example, a `timezone` field may contain a UUID-like string instead of a valid timezone identifier (such as "America/Chicago"), and other fields like `campaign_name` and `ip_pool` may also contain placeholder values rather than actual data.<br>
+
+This is expected behavior. Test events are primarily for testing the connection and integration setup, not for validating data accuracy. To see real events with accurate data, use a test Currents integration to send actual event data through your pipeline.
+
+
+
+## At-least-once delivery
+
+As a high-throughput system, Currents provides an "at-least-once" delivery of events, meaning that duplicate events can occasionally be written to your storage bucket. This can happen when events are reprocessed from our queue for any reason.
+
+If your use cases require "exactly-once" delivery, you can use the unique identifier field that is sent with every event (`id`) to deduplicate events. Because the file leaves our control when it's written to your storage bucket, we have no way to guarantee deduplication from our end.
+
+## Timestamps
+
+All timestamps exported by Currents are sent in the UTC time zone. For some events where it is available, a time zone field is also included, which delivers the Internet Assigned Numbers Authority (IANA) format of the user's local time zone at the time of the event.
+
+### Latency
+
+Events sent to Braze through SDK or API can include a timestamp from the past. The most notable example is when SDK data gets queued, such as when there isn't mobile connectivity. In that case, the event timestamp will reflect when the event was generated. This means a percentage of events will appear to have high latency.
+
+## Apache Avro format
+
+The Braze Currents data storage integrations output data in the `.avro` format. We chose [Apache Avro](https://avro.apache.org/) because it is a flexible data format that natively supports schema evolution and is supported by a wide variety of data products: 
+
+- Avro is supported by nearly every major data warehouse.
+- In the event that you desire to leave your data in S3, Avro compresses better than CSV and JSON, so you pay less for storage and potentially can use less CPU to parse the data.
+- Avro requires schemas when data is written or read. Schemas can be evolved over time to handle the addition of fields without breaking.
+
+Currents will create a file for each event type using the following format:
+
+```
+<your-bucket-prefix>/dataexport.<cluster-identifier>.<connection-type-identifier>.integration.<integration-id>/event_type=<event-type>/date=<date>/version=<currents_version>/<environment>/dataexport.<cluster-identifier>.<connection-type-identifier>.integration.<integration-id>+<partition>+<offset>.avro
+```
+
+**Tip:**
+
+
+Can't see the code because of the scroll bar? Learn how to fix that [here](https://www.braze.com/docs/user_guide/).
+
+
+
+For example, a push send event path can look like:
+
+```
+currents-export/dataexport.prod-01.S3.integration.69cadaaed2d51b7c75b1a3e5/event_type=users.messages.pushnotification.Send/date=2025-04-01-17/version=6/us-01/dataexport.prod-01.S3.integration.69cadaaed2d51b7c75b1a3e5+0+123456.avro
+```
+
+The `version` path segment is a simple integer Currents version value, such as `version=6`.
+
+|Filename Segment |Definition|
+|---|---|
+| `<your-bucket-prefix>` | The prefix set for this Currents integration. |
+| `<cluster-identifier>` | For internal use by Braze. Will be a string such as "prod-01", "prod-02", "prod-03", or "prod-04". All files will have the same cluster identifier.|
+| `<connection-type-identifier>` | The identifier for type of connection. Options are "S3", "AzureBlob", or "GCS". |
+| `<integration-id>` | The unique ID for this Currents integration. |
+| `<event-type>` | The type of the event in the file. |
+| `<date>` | The hour that events are queued in our system for processing in the UTC time zone. Formatted YYYY-MM-DD-HH. |
+| `version=<currents_version>` | The Currents version for the pipeline path. This value is a simple integer such as `6`. |
+| `<environment>` | For internal use by Braze. |
+| `<partition>` | For internal use by Braze. Integer. |
+| `<offset>`| For internal use by Braze. Integer. Note that different files sent within the same hour will have a different `<offset>` parameter. |
+{: .reset-td-br-1 .reset-td-br-2 aria-label="Apache Avro format" }
+
+**Tip:**
+
+
+File naming conventions may change. Braze recommends searching all keys in your bucket that have a prefix of &lt;your-bucket-prefix&gt;.
+
+
+
+### Avro write threshold
+
+Under normal circumstances, Braze will write data files to your storage bucket every 5 minutes or 15,000 events, whichever is sooner. Under heavy load, we may write larger data files with as many as 100,000 events per file.
+
+**Important:**
+
+
+Currents will never write empty files.
+
+
+
+### Avro schema changes
+
+From time to time, Braze may make changes to the Avro schema when fields are added, changed, or removed. For our purposes here, there are two types of changes: breaking and non-breaking. All schema changes are bundled into Currents releases, and each release advances the `version=<currents_version>` segment in the storage path (for example, `version=6` to `version=7`). Currents events written to Azure Blob Storage, Google Cloud Storage, and Amazon S3 use the following path format:
+
+```
+<your-bucket-prefix>/<currents-integration-id>/event_type=<event-type>/date=<date>/version=<currents_version>/<environment>/<avro-file>
+```
+
+#### Non-breaking changes
+
+When a field is added to the Avro schema, we consider this a non-breaking change. Added fields will always be "optional" Avro fields (such as with a default value of `null`), so they will "match" older schemas according to the [Avro schema resolution spec](http://avro.apache.org/docs/current/spec.html#schema+resolution). These additions should not affect existing Extract, Transform, and Load (ETL) processes as the field will simply be ignored until it is added to your ETL process.
+
+**Important:**
+
+
+We recommend that your ETL setup is explicit about the fields it processes to avoid breaking the flow when new fields are added.
+
+
+
+#### Breaking changes
+
+When a field is removed from or changed in the Avro schema, we consider this a breaking change. Breaking changes may require modifications to existing ETL processes as fields that were in use may no longer be recorded as expected.
+
+All breaking changes will be communicated in advance of the release.
+
+For a full history of changes by version, refer to the [Currents changelog](https://www.braze.com/docs/user_guide/data/distribution/braze_currents/event_glossary/currents_changelogs).

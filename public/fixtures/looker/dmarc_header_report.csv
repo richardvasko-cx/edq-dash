@@ -1,0 +1,10 @@
+from_domain,spf_result,dkim_result,dmarc_result,received_time,count,spf_pass,spf_notpass,dkim_pass,dkim_notpass,dmarc_pass,dmarc_notpass
+mail.tesco.com,pass,pass,pass,2026-06-16T06:00:00Z,122795,121567,1227,121567,1227,121567,1227
+email.morrisons.com,fail,pass,fail,2026-06-17T06:00:00Z,125653,109318,16334,124396,1256,110574,15078
+mail.waitrose.com,permerror,pass,fail,2026-06-18T06:00:00Z,82184,42735,39448,81362,821,43557,38626
+mail.sainsburys.co.uk,pass,pass,pass,2026-06-18T06:00:00Z,82750,81922,827,81922,827,81922,827
+mail.greggs.co.uk,pass,pass,pass,2026-06-20T06:00:00Z,94696,93749,946,93749,946,93749,946
+mail.coop.co.uk,pass,fail,fail,2026-06-20T06:00:00Z,100675,99668,1006,2013,98661,2013,98661
+mail.iceland.co.uk,pass,pass,pass,2026-06-21T06:00:00Z,73929,73189,739,73189,739,73189,739
+mail.lidl.co.uk,pass,pass,pass,2026-05-28T06:00:00Z,72686,71959,726,71959,726,71959,726
+mail.marksandspencer.com,pass,pass,pass,2026-06-03T06:00:00Z,87387,86513,873,86513,873,86513,873

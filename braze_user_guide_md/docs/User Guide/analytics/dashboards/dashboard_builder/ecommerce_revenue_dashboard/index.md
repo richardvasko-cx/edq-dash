@@ -1,0 +1,82 @@
+# eCommerce revenue dashboard
+
+> The **eCommerce Revenue - Last Touch Attribution** dashboard tracks last-touch attributed revenue for campaigns and Canvases using [eCommerce recommended events](https://www.braze.com/docs/ecommerce_events/). Use this dashboard to understand which messages drive revenue and to monitor overall eCommerce performance over time.
+
+**Note:**
+
+
+If you're using the new [Shopify connector](https://www.braze.com/docs/partners/ecommerce/shopify/multiple_stores/?tab=shopify%20connector), eCommerce recommended events are automatically available through the integration. Otherwise, these events must be implemented before data appears in this dashboard.
+
+
+
+To view your eCommerce revenue dashboard, go to **Analytics** > **Dashboard Builder**, then select **eCommerce Revenue - Last Touch Attribution**. This dashboard reports on revenue attributed to the last campaign or Canvas a user interacted with before placing an order, within the selected conversion window.
+
+![eCommerce Revenue - Last Touch Attribution dashboard showing statistics for eCommerce Revenue, Daily Orders Placed, and Average Daily eCommerce Revenue, and an eCommerce Revenue Over Time chart.](https://www.braze.com/docs/assets/img/ecommerce/ecommerce_revenue_dashboard.png?748145674811424af05985987ebc6d13)
+
+## Available metrics
+
+| Metric | Definition |
+| --- | --- |
+| eCommerce Revenue | Total last-touch attributed revenue based on the selected date range and conversion window. |
+| Daily Orders Placed | The average number of distinct orders placed per day. |
+| Average Daily eCommerce Revenue | Average attributed revenue per day for the selected time period. |
+| eCommerce Revenue Over Time | A time series of attributed revenue in the selected date range. |
+| eCommerce Revenue by Campaign | Attributed revenue broken down by campaign. | 
+| eCommerce Revenue by Canvas | Attributed revenue broken down by Canvas. |
+{: .reset-td-br-1 .reset-td-br-2 aria-label="Available metrics" }
+
+![eCommerce Revenue by Campaign and eCommerce Revenue by Canvas charts.](https://www.braze.com/docs/assets/img/ecommerce/ecommerce_revenue_charts.png?775c7c193209b931a128d418f0408159)
+
+## Attribution model
+
+The **eCommerce Revenue - Last Touch Attribution** dashboard uses last-touch attribution. This means revenue is attributed to the most recent Braze campaign or Canvas a user engaged with prior to placing an order.
+
+The following message interactions qualify as touch events for attribution:
+
+- Email click
+- Push open
+- Content Card click
+- In-app message click
+- SMS short link click
+- WhatsApp short link click
+
+**Important:**
+
+
+Message interactions must have occurred within the selected conversion window. Orders without an eligible message interaction within the conversion window are not attributed.
+
+
+
+## Included data
+
+The **eCommerce Revenue - Last Touch Attribution** dashboard pulls in data from eCommerce recommended events:
+
+- `ecommerce.product_viewed`
+- `ecommerce.cart_updated`
+- `ecommerce.checkout_started`
+- `ecommerce.order_placed`
+- `ecommerce.order_refunded`
+- `ecommerce.order_cancelled`
+
+**Note:**
+
+
+For data to populate in the **eCommerce Revenue - Last Touch Attribution** dashboard, the `total_value`, `product.price`, and `product.quantity` for the `ecommerce.order_placed` event must be `0` or higher.
+
+
+
+Revenue and order counts use Braze standardized calculations.
+
+| Metric | Calculation |
+| --- | --- |
+| Total Revenue | Sum of order placed values − Sum of refunded values |
+| Total Orders | Distinct orders placed − Distinct orders cancelled |
+{: .reset-td-br-1 .reset-td-br-2 aria-label="Included data" }
+
+### Excluded data
+
+Purchases logged using the legacy purchase event are not included. The **eCommerce Revenue - Last Touch Attribution** dashboard currently does not support features tied to legacy purchase events, such as LTV or revenue reporting within campaigns or Canvases. 
+
+## Currency handling
+
+All revenue is displayed in USD. Non-USD currencies are converted to USD using the exchange rate on the date the event is reported. To prevent conversion, hardcode the currency to `USD` when sending events.

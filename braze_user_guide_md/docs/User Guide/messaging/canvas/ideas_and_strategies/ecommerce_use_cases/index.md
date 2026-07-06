@@ -1,0 +1,456 @@
+# How to use eCommerce recommended events
+
+> This page covers how and where you can use eCommerce recommended events across the platform, including how to use Braze eCommerce Canvas templates.
+
+**Note:**
+
+
+If you're using the new Shopify connector, eCommerce recommended events are automatically available through the integration.
+
+
+
+## Using a Canvas template
+
+To use a Canvas template:
+1. Go to **Messaging** > **Canvas**.
+2. Select **Create Canvas** > **Use a Canvas Template**.
+3. Browse the **Braze templates** tab for the template you want to use. You can preview a template by selecting its name.
+4. Select **Apply Template** for the template you want to use.<br><br>!["Canvas templates" page opened to the "Braze templates" tab and showing a list of recently used templates and selectable Braze templates.](https://www.braze.com/docs/assets/img_archive/apply_template.png?c9f7f308c9c912b993cd7f8d02cb467c){: style="max-width:80%;"}
+
+## eCommerce Canvas templates
+
+Braze offers four eCommerce Canvas templates.
+
+
+
+
+### Abandoned browse
+
+Use the **Abandoned browse** template to engage users who have browsed products but did not add them to their cart or place an order.
+
+![An applied "Abandoned Browse" Canvas template with expanded "Entry Rules".](https://www.braze.com/docs/assets/img_archive/abandoned_browse.png?227d20ff870fe4f89ddf52bd1a5c2a1d)
+
+#### Setup
+
+On the Canvas page, select **Use a Canvas Template** > **Braze templates** and then apply the **Abandoned browse** template. 
+
+##### Default settings
+
+The following settings are pre-configured in your Canvas:
+- Basics 
+    - Canvas name: **Abandoned browse**
+    - Conversion event: `ecommerce.order placed`
+        - Conversion deadline: 3 days 
+- Entry schedule 
+    - Action-based when a user performs the `ecommerce.product_viewed` event
+    - Start time is when you create the Canvas template<br><br>!["Action Based Options" for the Canvas.](https://www.braze.com/docs/assets/img/ecommerce/abandoned_browse_entry.png?6e460471aeb2343dbf9747bcfd61abf9)<br><br> 
+- Target audience 
+    - Entry audience 
+        - Email **is not blank**
+        - You can also modify the entry audience criteria to meet your business needs
+    - Entry controls
+        - Users are eligible to re-enter this Canvas after the full duration of the Canvas is complete
+    - Exit criteria 
+        - Performs `ecommerce.cart_updated`, `ecommerce.checkout_started`, or `ecommerce.order_placed`<br><br>![Entry controls and exit criteria for the Canvas.](https://www.braze.com/docs/assets/img/ecommerce/abandoned_browse_entry_exit.png?f9fb0f9d70c9b0470158d44532ab8a4c)<br><br> 
+- Send settings 
+    - Users who are subscribed or opted in 
+- Delay step
+    - 1 hour delay
+- Message step 
+    - Review the email template and HTML block with a Liquid templating example to add products to your message in the pre-built template. If you use your own email template, you can also reference [Liquid variables](#message-personalization), as demonstrated in the following section.
+
+#### Abandoned browse product personalization for emails 
+
+Here is an example of how you would add an HTML product block for your Abandoned Browse email. 
+
+
+```java
+<table aria-label="Abandoned browse product personalization for emails" style="width:100%">
+  <tr>
+    <th><img src="{{context.${image_url}}}" width="200" height="200"><img></th>
+    <th align="left">
+      <ul style="list-style-type: none">
+        <li>Item: {{context.${product_name}}}</li>
+        <li>Price: ${{context.${price}}}</li>
+      </ul>
+    </th>
+  </tr>
+</table>
+```
+
+
+##### Product URL
+
+
+```liquid
+{{context.${product_url}}}
+```
+    
+
+
+
+
+### Abandoned cart
+
+Use the **Abandoned cart** template to cover potential lost sales from customers who added products to their cart but did not continue to checkout or place an order. 
+
+![An applied "Abandoned Cart" Canvas template with expanded "Entry Rules".](https://www.braze.com/docs/assets/img_archive/abandoned_cart.png?0d89e0a4e29af550228a1b79d26b34a9)
+
+#### Setup
+
+On the Canvas page, select **Use a Canvas Template** > **Braze templates** and then apply the **Abandoned cart** template. 
+
+##### Default settings
+
+The following settings are pre-configured in your Canvas:
+- Basics 
+    - Canvas name: **Abandoned cart**
+    - Conversion event: `ecommerce.order_placed`
+        - Conversion deadline: 3 days 
+- Entry schedule 
+    - Action-based trigger when a user triggers the **Perform Cart Updated Event** (located in the dropdown)
+    - Start time is when you create the Canvas template<br><br>!["Action Based Options" for the Canvas.](https://www.braze.com/docs/assets/img/ecommerce/abandoned_cart_entry.png?bfcde31a86077f89b31c2c031ed8553f)<br><br> 
+- Target Audience 
+    - Entry audience 
+        - Has used these apps **more than 0** times 
+        - Email **is not blank**
+    - Entry controls
+        - Users are immediately re-eligible for Canvas entry
+    - Exit criteria 
+        - Performs `ecommerce.cart_updated`, `ecommerce.checkout_started`, or `ecommerce.order_placed`<br><br>![Entry controls and exit criteria for the Canvas.](https://www.braze.com/docs/assets/img/ecommerce/abandoned_cart_entry_exit.png?16c6b7fc1c38c953185b987cd58ffa60)<br><br> 
+- Send settings 
+    - Users who are subscribed or opted in 
+- Delay step
+     - 4 hour delay
+- Message step 
+    - Review the email template and HTML block with a Liquid templating example to add products to your message in the pre-built template. If you use your own email template, you can also reference [Liquid variables](#message-personalization), as demonstrated in the following section.
+
+#### How abandoned cart re-entry logic works
+
+When a user starts the checkout process, their cart is marked as `checkout_started`. From that point onward, any further cart updates with the same cart ID will not qualify the user to re-enter the abandoned cart user journey.
+
+1. When a user adds an item to their cart, they enter the Canvas.
+2. Each time they add or update items, they re-enter the Canvas—this keeps their cart data and messaging up to date.
+3. When the user starts the checkout process, their cart is tagged as `checkout_started`, and they exit the Canvas.
+4. Any future cart updates using the same cart ID will not trigger re-entry because this cart has already moved into the checkout stage.
+
+When users move to the checkout user journey, they're targeted by the [abandoned checkout Canvas](#abandoned-checkout) instead, which is designed for users further along in the purchase journey.
+
+#### Abandoned cart product personalization for emails {#abandoned-cart-checkout}
+
+Abandoned cart user journeys require a special `shopping_cart` Liquid tag for product personalization. 
+
+Here is an example of how you would add an HTML block with your `shopping_cart` Liquid tag to add products into your email. 
+
+
+```java
+<table aria-label="Abandoned cart product personalization for emails #abandoned-cart-checkout" style="width:100%">
+  {% shopping_cart {{context.${cart_id}}} %}
+  {% for item in shopping_cart.products %}
+  {% catalog_items <add_your_catalog_name> {{item.variant_id}} %}
+  <tr>
+    <th><img src="{{ items[0].variant_image_url }}" width="200" height="200"><img></th>
+    <th align="left">
+      <ul style="list-style-type: none">
+        <li>Item: {{ item.product_name }}</li>
+        <li>Price: ${{ item.price }}</li>
+        <li>Quantity: ${{ item.quantity }}</li>
+        <li>Variant ID: {{ item.variant_id }}</li>
+        <li>Product URL:{{ item.product_url }}</li>
+        <li>SKU: {{ item.metadata.sku }}</li>
+      </ul>
+    </th>
+  </tr>
+  {% endfor %}
+</table>
+```
+
+
+**Note:**
+
+
+If you use Shopify, add your catalog name to get the variant image URL. 
+
+
+
+##### HTML cart URL
+
+If you want to direct users back to their cart, you can add a nested event property under the metadata object, such as:
+
+
+```liquid
+{{context.${metadata}.cart_url}}
+```
+
+
+If you use Shopify, create your cart URL by using this Liquid template:
+
+
+```liquid
+{{context.${source}}}/checkouts/cn/{{context.${cart_id}}} 
+```
+
+
+
+
+
+### Abandoned checkout
+
+Use the **Abandoned checkout** template to target customers who started the checkout process but left before placing their order. 
+
+![An applied "Abandoned Checkout" Canvas template with expanded "Entry Rules".](https://www.braze.com/docs/assets/img_archive/abandoned_checkout.png?86ee87fe7cc26b46920dae2ce7274a8e)
+
+#### Setup
+
+On the Canvas page, select **Use a Canvas Template** > **Braze templates** and then apply the **Abandoned checkout** template. 
+
+##### Default settings
+
+The following settings are pre-configured in your Canvas:
+
+- Basics 
+    - Canvas name: **Abandoned checkout**
+    - Conversion event: `ecommerce.order_placed`
+        - Conversion deadline: 3 days 
+- Entry schedule 
+    - Action-based trigger when a user performs the `ecommerce.checkout_started` event
+    - Start time is when you create the Canvas template<br><br>!["Action Based Options" for the Canvas.](https://www.braze.com/docs/assets/img/ecommerce/abandoned_checkout_entry.png?393a872b484e98c324c59c5f4396c3c6)
+- Target audience 
+    - Entry audience 
+        - Has used these apps **more than 0** times 
+        - Email **is not blank**
+    - Entry controls
+        - Users are immediately re-eligible for Canvas entry
+        - Exit criteria 
+            - Performs the `ecommerce.order_placed` events<br><br>![Entry controls and exit criteria for the Canvas.](https://www.braze.com/docs/assets/img/ecommerce/abandoned_checkout_entry_exit.png?d4f96ee8dd405433d7d69b548d7cfc10)<br><br>
+- Send settings 
+    - Users who are subscribed or opted in 
+- Delay step
+    - 4 hour delay
+- Message step 
+    - Review the email template and HTML block with a Liquid templating example to add products to your message in the pre-built template. If you use your own email template, you can also reference [Liquid variables](#message-personalization), as demonstrated in the following section.
+
+#### Abandoned checkout personalization for emails
+
+Abandoned checkout user journeys require a special `shopping_cart` Liquid tag for product personalization. 
+
+Here is an example of how you would add an HTML block with your `shopping_cart` Liquid tag to add products into your email. 
+
+
+```java
+<table aria-label="Abandoned checkout personalization for emails" style="width:100%">
+  {% shopping_cart {{context.${cart_id}}} :abort_if_not_abandoned false %}
+  {% for item in shopping_cart.products %}
+  {% catalog_items <add_your_catalog_name> {{item.variant_id}} %}
+  <tr>
+    <th><img src="{{ items[0].variant_image_url }}" width="200" height="200"><img></th>
+    <th align="left">
+      <ul style="list-style-type: none">
+        <li>Item: {{ item.product_name }}</li>
+        <li>Price: ${{ item.price }}</li>
+        <li>Quantity: ${{ item.quantity }}</li>
+        <li>Variant ID: {{ item.variant_id }}</li>
+        <li>Product URL:{{ item.product_url }}</li>
+        <li>SKU: {{ item.metadata.sku }}</li>
+      </ul>
+    </th>
+    {% endfor %}
+</table>
+```
+
+
+##### `abort_if_not_abandoned` {#abort-if-not-abandoned}
+
+The `abort_if_not_abandoned` parameter is specific to the abandoned checkout use case and is used only with the `shopping_cart` Liquid tag in conjunction with the `ecommerce.checkout_started` event.
+
+| Value | Behavior |
+| ----- | -------- |
+| `true` (default) | The message is aborted if the cart has not been abandoned—that is, if the user has since completed their order. |
+| `false` | The message is sent even if the cart is not in an abandoned state, allowing the email to include cart details regardless of the current checkout status. |
+{: .reset-td-br-1 .reset-td-br-2 aria-label="abortifnotabandoned #abort-if-not-abandoned" }
+
+Set `abort_if_not_abandoned` to `false` when you want to send the checkout reminder regardless of whether the cart is still considered abandoned at send time. If you omit the parameter or set it to `true`, Braze aborts the message for users who have already completed their purchase.
+
+##### Checkout URL
+
+
+```liquid
+{{context.${metadata}.checkout_url}}
+```
+
+
+
+
+
+### Order confirmation and feedback survey
+
+Use the **Order confirmation & feedback survey** template to confirm successful orders and enhance customer satisfaction.
+
+![An applied "Order confirmation" Canvas template with expanded "Entry Rules".](https://www.braze.com/docs/assets/img_archive/order_confirmation_feedback.png?d52b30c185386e9651e7d2f1de5b2a9d)
+
+#### Setup
+
+On the Canvas page, select **Use a Canvas Template** > **Braze templates** and then apply the **Order confirmation & feedback survey** template. 
+
+##### Default settings
+
+The following settings are pre-configured in your Canvas:
+
+- Basics 
+    - Canvas name: **Order confirmation with feedback survey**
+    - Conversion event: `ecommerce.session_start`
+        - Conversion deadline: 10 days 
+- Entry schedule 
+    - Action-based trigger when a user performs the `ecommerce.cart_updated` event
+    - Start time is when you create the Canvas template<br><br>!["Action Based Options" for the Canvas.](https://www.braze.com/docs/assets/img/ecommerce/feedback_entry.png?d5332d6baa2137ccd7f1d357f080b34a)<br><br>
+- Target audience 
+    - Entry audience 
+        - Has used these apps **more than 0** times 
+        - Email **is not blank**
+    - Entry controls
+        - Users are immediately re-eligible for Canvas entry
+    - Exit criteria 
+        - Not applicable<br><br>![Additional filters and entry controls for the Canvas.](https://www.braze.com/docs/assets/img/ecommerce/feedback_entry_exit.png?7c41fe6f11707edf55b1d502f6844312)<br><br>
+- Send settings 
+    - Users who are subscribed or opted in 
+- Message step 
+    - Review the email template and HTML block with a Liquid templating example to add products to your message in the pre-built template. If you use your own email template, you can also reference [Liquid variables](#message-personalization), as demonstrated in the following section.
+
+#### Order confirmation personalization for emails
+
+Here is an example of how you would add an HTML product block to your order confirmation after an order is placed.
+
+
+```json
+<table aria-label="Order confirmation personalization for emails" style="width:100%">
+  {% for item in {{context.${products}}} %}
+  {% catalog_items <add_your_catalog_name> {{item.variant_id}} %}
+  <tr>
+    <th><img src="{{ items[0].variant_image_url }}" width="200" height="200" /></th>
+    <th align="left">
+      <ul style="list-style-type: none">
+        <li>Item: {{item.product_name}}</li>
+        <li>Price: {{item.price}}</li>
+        <li>Quantity: {{item.quantity}}</li>
+      </ul>
+    </th>
+  </tr>
+  {% endfor %}
+</table>
+```
+
+
+##### Order status URL
+
+
+```liquid
+{{context.${metadata}.order_status_url}}
+```
+
+
+
+
+
+## Message personalization
+
+[Liquid](https://www.braze.com/docs/user_guide/messaging/design_and_edit/personalize/liquid/) is a powerful templating language used by Braze that allows you to create dynamic and personalized content for your customers. By using Liquid tags, you can customize messages based on customer data, product information, and other variables, enhancing the shopping experience and driving engagement.
+
+### Key features of Liquid
+
+- **Dynamic content:** Insert customer-specific information such as names, order details, and preferences into your messages.
+- **Conditional logic:** Use if/else statements to display different content based on specific conditions (such as customer location and purchase history).
+- **Loops:** Iterate over collections of products or customer data to display lists or grids of items.
+
+### Getting started with Liquid
+
+To begin personalizing your messages using Liquid tags, you can refer to the following resources:
+
+- [Shopify data](https://www.braze.com/docs/shopify_features/#shopify-data) reference with pre-defined liquid tags
+- [Liquid](https://www.braze.com/docs/user_guide/messaging/design_and_edit/personalize/liquid/)
+
+## Segmentation
+
+Use Braze segments to create targeted customer segments based on specific attributes and behaviors, and deliver personalized messaging and campaigns. With this powerful feature, you can effectively engage your customers by reaching the right audience with the right message at the right time.
+
+For more information on getting started with segments, check out [About Braze segments](https://www.braze.com/docs/user_guide/audience/segments#about-braze-segments).
+
+### Recommended events
+
+eCommerce events are based on [recommended events](https://www.braze.com/docs/recommended_events/).
+Because recommended events are more opinionated custom events, you can search for the recommended eCommerce event names by selecting any [custom event filter](https://www.braze.com/docs/user_guide/data/activation/events/custom_events#segmentation-filters).
+
+### eCommerce filters
+
+Segment your users with eCommerce filters, like **Ecommerce Source** and **Total Revenue**, by going to the **Ecommerce** section within the segmenter. 
+
+For a list of eCommerce filters and their definitions, refer to [Segment filters](https://www.braze.com/docs/user_guide/audience/segments/segmentation_filters/) and select the "eCommerce" search category.
+
+![Segment filters dropdown with "Ecommerce" filters.](https://www.braze.com/docs/assets/img_archive/ecommerce_filters.png?d28b6620fb3bf9ca97c74e8f7a377c96){: style="max-width:50%"}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Nested event properties
+
+To segment by nested event properties, you can leverage [Segment Extensions](https://www.braze.com/docs/user_guide/audience/segments/segment_extension#why-use-segment-extensions). For example, you can use Segment Extensions to find who has bought the product “SKU-123” in the last 90 days.
+
+## Analytics
+
+### Custom events report
+
+You can track eCommerce recommended event volume in the [Custom Events report](https://www.braze.com/docs/user_guide/data/activation/events/custom_events#analytics). Filter by **Perform Custom Event**, then specify the [eCommerce recommended event name](https://www.braze.com/docs/user_guide/data/activation/events/recommended_events/ecommerce_events#types-of-ecommerce-recommended-events) to view its performance over time.
+
+![Custom Events chart displaying results for six selected events.](https://www.braze.com/docs/assets/img/ecommerce/custom_events_chart.png?08dc9262f5b12eb58d3283988fc7544c)
+
+### Dashboards
+
+#### Conversions dashboard
+
+After you launch a campaign or Canvas using the "Places Order" conversion event, you can create a corresponding [conversion report](https://www.braze.com/docs/user_guide/analytics/dashboards/conversions#setting-up-your-report) to track performance.
+
+![Conversions Details table with campaigns and Canvases, and the associated conversion statistics.](https://www.braze.com/docs/assets/img_archive/conversion_details_table.png?77eb70a253fea124bde0c70cf9760b88)
+
+#### eCommerce revenue dashboard
+
+To gain insights into revenue attributed to the last campaign or Canvas a user interacted with before placing an order, use the [eCommerce revenue dashboard](https://www.braze.com/docs/ecommerce_revenue_dashboard/) and select a conversion window.
+
+### Revenue report 
+
+To analyze data from these new events, go to the [Dashboard Builder](https://www.braze.com/docs/user_guide/analytics/dashboards/dashboard_builder/) and view the [**eCommerce Revenue - Last Touch Attribution** dashboard](https://www.braze.com/docs/ecommerce_revenue_dashboard/).
