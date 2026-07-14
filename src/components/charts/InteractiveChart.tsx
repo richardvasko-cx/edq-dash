@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import {
-  LineChart, Line, BarChart, Bar, PieChart, Pie, XAxis, YAxis,
+  LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell
 } from 'recharts';
 import { CHART_SERIES, CHART_BAR_RADIUS, CHART_LINE_WIDTH } from '../../brand';
@@ -10,26 +10,32 @@ interface ChartConfig {
   xField: string;
   yField: string;
   seriesField?: string;
-  chartType?: 'line' | 'bar' | 'pie';
+  chartType?: 'line' | 'area' | 'bar' | 'pie';
   data: any[];
 }
 
-// Light-purple surface palette — matches brand but readable on light bg
-const LIGHT_GRID   = '#D8CFF5';
-const LIGHT_TICK   = { fill: '#6B46C1', fontSize: 10, fontWeight: 700 };
-const LIGHT_TOOLTIP = {
+const GRID = 'rgba(255,255,255,0.14)';
+const TICK = { fill: '#D8C7FF', fontSize: 10, fontWeight: 800 };
+const TOOLTIP = {
   contentStyle: {
-    background: '#2D0A6E',
-    borderRadius: 10,
-    border: '1px solid #7C3AED',
-    boxShadow: '0 8px 32px rgba(109,40,217,0.25)',
+    background: '#1F0144',
+    borderRadius: 12,
+    border: '1px solid rgba(216,199,255,0.18)',
+    boxShadow: '0 12px 36px rgba(31,1,68,0.34)',
     fontSize: 11,
-    padding: '8px 10px',
+    padding: '9px 11px',
   },
-  labelStyle: { fontWeight: 800, color: '#EDE9FE', marginBottom: 2 },
-  itemStyle:  { fontWeight: 700, color: '#C4B5FD', padding: 0 },
+  labelStyle: { fontWeight: 900, color: '#F3E8FF', marginBottom: 3 },
+  itemStyle:  { fontWeight: 800, color: '#E9D5FF', padding: 0 },
 };
-const LIGHT_CURSOR = { fill: '#7C3AED', opacity: 0.12 };
+const CURSOR = { fill: '#A78BFA', opacity: 0.12 };
+const compact = (value: number) => {
+  if (!Number.isFinite(Number(value))) return String(value ?? '');
+  const n = Number(value);
+  if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(n) >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(Math.round(n * 100) / 100);
+};
 
 export default function InteractiveChart({ config }: { config: ChartConfig }) {
   const { title, xField, yField, seriesField, chartType = 'line', data } = config;
@@ -72,17 +78,17 @@ export default function InteractiveChart({ config }: { config: ChartConfig }) {
   const color = (i: number) => CHART_SERIES[i % CHART_SERIES.length];
 
   // Compact tick formatter — truncate long labels
-  const tickFmt = (v: string) => v.length > 8 ? v.slice(0, 7) + '…' : v;
+  const tickFmt = (v: string) => v.length > 10 ? v.slice(0, 9) + '…' : v;
 
   const sharedProps = {
-    margin: { top: 8, right: 6, left: -28, bottom: 0 },
+    margin: { top: 8, right: 14, left: -18, bottom: 0 },
   };
 
-  const sharedGrid  = <CartesianGrid stroke={LIGHT_GRID} strokeOpacity={0.6} vertical={false} />;
-  const sharedXAxis = <XAxis dataKey={xField} tick={LIGHT_TICK} axisLine={false} tickLine={false} tickFormatter={tickFmt} interval="preserveStartEnd" />;
-  const sharedYAxis = <YAxis tick={LIGHT_TICK} axisLine={false} tickLine={false} width={36} />;
-  const sharedTip   = <Tooltip cursor={LIGHT_CURSOR} contentStyle={LIGHT_TOOLTIP.contentStyle} labelStyle={LIGHT_TOOLTIP.labelStyle} itemStyle={LIGHT_TOOLTIP.itemStyle} />;
-  const sharedLeg   = <Legend wrapperStyle={{ fontSize: 10, paddingTop: 6, color: '#7C3AED', fontWeight: 700 }} iconSize={8} />;
+  const sharedGrid  = <CartesianGrid stroke={GRID} vertical={false} />;
+  const sharedXAxis = <XAxis dataKey={xField} tick={TICK} axisLine={false} tickLine={false} tickFormatter={tickFmt} interval="preserveStartEnd" />;
+  const sharedYAxis = <YAxis tick={TICK} axisLine={false} tickLine={false} width={44} tickFormatter={(value: number) => compact(value)} />;
+  const sharedTip   = <Tooltip cursor={CURSOR} contentStyle={TOOLTIP.contentStyle} labelStyle={TOOLTIP.labelStyle} itemStyle={TOOLTIP.itemStyle} />;
+  const sharedLeg   = <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8, color: '#E9D5FF', fontWeight: 800 }} iconSize={8} />;
 
   const renderChart = () => {
     switch (chartType) {
@@ -106,11 +112,31 @@ export default function InteractiveChart({ config }: { config: ChartConfig }) {
             <Pie data={pieData} cx="50%" cy="48%" innerRadius={44} outerRadius={72} paddingAngle={3} dataKey="value" strokeWidth={0}>
               {pieData.map((_, i) => <Cell key={i} fill={color(i)} />)}
             </Pie>
-            <Tooltip contentStyle={LIGHT_TOOLTIP.contentStyle} labelStyle={LIGHT_TOOLTIP.labelStyle} itemStyle={LIGHT_TOOLTIP.itemStyle} />
-            <Legend wrapperStyle={{ fontSize: 10, color: '#7C3AED', fontWeight: 700 }} iconSize={8} />
+            <Tooltip contentStyle={TOOLTIP.contentStyle} labelStyle={TOOLTIP.labelStyle} itemStyle={TOOLTIP.itemStyle} />
+            <Legend wrapperStyle={{ fontSize: 10, color: '#E9D5FF', fontWeight: 800 }} iconSize={8} />
           </PieChart>
         );
       }
+
+      case 'area':
+        return (
+          <AreaChart data={transformedData} {...sharedProps}>
+            {sharedGrid}{sharedXAxis}{sharedYAxis}{sharedTip}{sharedLeg}
+            {seriesKeys.map((key, i) => (
+              <Area
+                key={key}
+                type="monotone"
+                dataKey={key}
+                stroke={color(i)}
+                strokeWidth={CHART_LINE_WIDTH}
+                fill={color(i)}
+                fillOpacity={0.22}
+                dot={false}
+                activeDot={{ r: 5, fill: color(i), stroke: '#fff', strokeWidth: 2 }}
+              />
+            ))}
+          </AreaChart>
+        );
 
       case 'line':
       default:
@@ -135,20 +161,15 @@ export default function InteractiveChart({ config }: { config: ChartConfig }) {
 
   return (
     <div
-      className="w-full rounded-xl my-3 flex flex-col gap-1.5 overflow-hidden"
-      style={{
-        background: 'linear-gradient(135deg, #EDE9FE 0%, #F5F0FF 60%, #EAE4FF 100%)',
-        border: '1px solid #C4B5FD',
-        padding: '12px 14px 10px',
-      }}
+      className="my-3 flex w-full flex-col gap-2 overflow-hidden rounded-2xl border border-purple-300/10 bg-[#300266] px-4 pb-3 pt-3 shadow-[0_12px_36px_rgba(48,2,102,0.14)]"
     >
       {title && (
-        <p className="text-[12px] font-bold text-purple-800 select-none leading-tight mb-0.5">
+        <p className="mb-0.5 select-none text-[12px] font-black leading-tight text-purple-100">
           {title}
         </p>
       )}
       {/* Height scales with series count — more series = taller for legend */}
-      <div style={{ height: chartType === 'pie' ? 180 : seriesKeys.length > 3 ? 200 : 175 }} className="w-full">
+      <div style={{ height: chartType === 'pie' ? 190 : seriesKeys.length > 3 ? 220 : 190 }} className="w-full">
         <ResponsiveContainer width="100%" height="100%">
           {renderChart()}
         </ResponsiveContainer>

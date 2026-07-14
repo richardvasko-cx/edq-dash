@@ -1,0 +1,88 @@
+<svg
+  viewBox="0 0 1280 1280"
+  xmlns="http://www.w3.org/2000/svg"
+  fill="none"
+  shape-rendering="geometricPrecision"
+>
+  <defs>
+    <linearGradient id="greenFill" x1="294" y1="92" x2="990" y2="320" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#26BF73"/>
+      <stop offset="1" stop-color="#18A85F"/>
+    </linearGradient>
+
+    <linearGradient id="yellowFill" x1="74" y1="410" x2="804" y2="170" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFC619"/>
+      <stop offset="1" stop-color="#FFD332"/>
+    </linearGradient>
+
+    <linearGradient id="redFill" x1="790" y1="220" x2="1180" y2="860" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF554B"/>
+      <stop offset="1" stop-color="#F2352E"/>
+    </linearGradient>
+
+    <linearGradient id="blueFill" x1="160" y1="350" x2="1100" y2="1075" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5C98F8"/>
+      <stop offset="0.55" stop-color="#4D8BF2"/>
+      <stop offset="1" stop-color="#3E79E8"/>
+    </linearGradient>
+
+    <radialGradient id="blueGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
+      gradientTransform="translate(335 635) scale(300 240)">
+      <stop offset="0" stop-color="#78ADFF" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#78ADFF" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="blueEdge" x1="160" y1="350" x2="160" y2="1075" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7CB2FF" stop-opacity="0.9"/>
+      <stop offset="0.06" stop-color="#6EA5FA" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#2D66D2" stop-opacity="0.68"/>
+    </linearGradient>
+
+    <linearGradient id="cardTopHighlight" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="5" stdDeviation="4" flood-color="#000000" flood-opacity="0.18"/>
+    </filter>
+
+    <filter id="frontShadow" x="-10%" y="-10%" width="130%" height="130%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="6" stdDeviation="3" flood-color="#2F6EDB" flood-opacity="0.35"/>
+    </filter>
+
+    <filter id="barShadow" x="-20%" y="-40%" width="140%" height="180%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="3" stdDeviation="2" flood-color="#1F57B7" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#softShadow)">
+    <rect x="272" y="80" width="720" height="332" rx="28" fill="url(#greenFill)"/>
+    <rect x="277" y="85" width="710" height="7" rx="3.5" fill="url(#cardTopHighlight)" opacity="0.45"/>
+    <path d="M632 128L992 200V412H992L714 377L694 221C688 177 671 158 632 128Z" fill="#0A834B" opacity="0.12"/>
+  </g>
+
+  <g filter="url(#softShadow)">
+    <rect x="34" y="315" width="770" height="456" rx="28" transform="rotate(-19 34 315)" fill="url(#yellowFill)"/>
+    <rect x="39" y="320" width="760" height="8" rx="4" transform="rotate(-19 39 320)" fill="#FFF1A7" opacity="0.38"/>
+  </g>
+
+  <g filter="url(#softShadow)">
+    <rect x="732" y="164" width="496" height="648" rx="28" transform="rotate(14 732 164)" fill="url(#redFill)"/>
+    <rect x="737" y="169" width="486" height="8" rx="4" transform="rotate(14 737 169)" fill="#FFD3CF" opacity="0.33"/>
+    <path d="M770 228L1112 308L1125 1020L1088 1008L1088 382L810 316L770 228Z" fill="#A72522" opacity="0.15"/>
+  </g>
+
+  <g filter="url(#frontShadow)">
+    <rect x="160" y="350" width="940" height="725" rx="30" fill="url(#blueFill)"/>
+    <rect x="160" y="350" width="940" height="725" rx="30" fill="url(#blueGlow)"/>
+    <rect x="162.5" y="352.5" width="935" height="720" rx="27.5" stroke="url(#blueEdge)" stroke-width="5"/>
+    <rect x="168" y="357" width="924" height="7" rx="3.5" fill="#A9CBFF" opacity="0.32"/>
+  </g>
+
+  <g filter="url(#barShadow)">
+    <rect x="670" y="532" width="275" height="68" rx="16" fill="#F7F7F7"/>
+    <rect x="670" y="660" width="315" height="68" rx="16" fill="#F7F7F7"/>
+    <rect x="670" y="788" width="275" height="68" rx="16" fill="#F7F7F7"/>
+  </g>
+</svg>

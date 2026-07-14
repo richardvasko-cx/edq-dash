@@ -13,6 +13,9 @@ import { providerDisplayName } from './providerRouting';
 
 const dash = (v?: string) => (v && v.trim() ? v : '—');
 const pct = (v: number | undefined) => (v == null ? '—' : `${(v * 100).toFixed(1)}%`);
+const PLATFORM_ACCESS_NOTE =
+  'Customers do not have direct access to SparkPost, SendGrid, Amazon SES, MTA consoles, or Braze-managed IP tooling. Customer-facing actions must stay within their DNS provider, Braze, Looker, and recipient mailbox-provider channels such as Microsoft/Outlook, Gmail/Google, Yahoo/AOL, or Apple/iCloud.';
+
 export function buildWorkspaceSuggestions(t: CaseRecord | null): Record<WorkspacePanelId, string> {
   if (!t) {
     return {
@@ -42,7 +45,8 @@ export function buildWorkspaceSuggestions(t: CaseRecord | null): Record<Workspac
 
   const authenticationFindings = authIssue
     ? `Authentication shows findings that the customer's DNS / Infrastructure owner should correct before re-validation. ${authLine}\n` +
-      `Best practice (Customer DNS / Infrastructure): keep SPF within the 10 DNS-lookup limit, align the Return-Path to the header From, and confirm the ${provider} include/selector is published. Deliverability re-checks each sending domain via Tools → Dig once changes land.`
+      `Best practice (Customer DNS / Infrastructure): keep SPF within the 10 DNS-lookup limit, align the Return-Path to the header From, and confirm the Braze-provided SPF include/selector is published. Deliverability re-checks each sending domain via Tools → Dig once changes land.\n` +
+      PLATFORM_ACCESS_NOTE
     : `Authentication is correctly configured and aligned. ${authLine}\n` +
       `No authentication change is required; alignment is not contributing to this issue.`;
 
@@ -71,8 +75,9 @@ export function buildWorkspaceSuggestions(t: CaseRecord | null): Record<Workspac
   // who owns the customer relationship (they relay to the customer). EDS is advisory:
   // it does NOT contact the customer, submit provider tickets, or monitor the account,
   // so actions are framed as the CUSTOMER's (relayed) or to RAISE INTERNALLY — never
-  // "we will submit/monitor/coordinate". The customer submits their own provider
-  // requests and monitors via scheduled Looker reports / data in Braze.
+  // "we will submit/monitor/coordinate". The customer submits their own mailbox-provider
+  // requests and monitors via scheduled Looker reports / data in Braze. They do not
+  // have direct SparkPost, SendGrid, Amazon SES, MTA-console, or Braze-managed IP access.
   const stripOwner = (a: string) => a.replace(/^\s*(Customer\s+[A-Za-z /]+|Deliverability Team|Customer Contact)\s*:\s*/i, '').trim();
   const customerActions = t.recommended_actions.filter(a => /^\s*Customer\b/i.test(a)).map(stripOwner);
   const internalActions = t.recommended_actions.filter(a => !/^\s*Customer\b/i.test(a)).map(stripOwner);
@@ -89,7 +94,8 @@ export function buildWorkspaceSuggestions(t: CaseRecord | null): Record<Workspac
     `**What it means:**\n` +
     `${t.resolution_summary || `The pattern points to ${dominant}; the steps below are grouped by who needs to action them.`}\n\n` +
     `**For the customer to action (relay to them):**\n${bullets(customerActions)}\n` +
-    `- Submit any provider mitigation/delisting requests themselves and monitor recovery via their scheduled Looker reports and data in Braze.\n\n` +
+    `- Submit any recipient mailbox-provider mitigation/delisting requests themselves, where applicable, and monitor recovery via their scheduled Looker reports and data in Braze.\n` +
+    `- Do not ask them to use SparkPost, SendGrid, Amazon SES, raw MTA tooling, or Braze-managed IP provider consoles; they do not have direct access to those systems.\n\n` +
     `**To raise internally (cross-team / platform ticket):**\n${bullets(internalActions)}\n\n` +
     `Let me know if you have any questions on these steps.\n\n` +
     `— ${dash(t.case_owner)}, ${dash(t.case_owner_team)} (deliverability, advisory)`;

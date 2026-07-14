@@ -7,10 +7,11 @@
 //
 // Ownership framing: these are deliverability recommendations, NOT team task assignments.
 // The customer owns their own actions (DNS records at their provider; segments, suppression,
-// cadence, content and warm-up in Braze; their own provider escalations). "Email Ops" is
-// only relevant for technical set-up inside Braze — never implied to act for the customer.
-// We do not route steps to internal teams here unless a step genuinely cannot be done by
-// the customer.
+// cadence, content and warm-up in Braze; their own mailbox-provider escalations). Customers
+// do not have direct SparkPost, SendGrid, Amazon SES, MTA console, or Braze-managed IP access.
+// "Email Ops" is only relevant for technical set-up inside Braze — never implied to act for
+// the customer. We do not route steps to internal teams here unless a step genuinely cannot
+// be done by the customer.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '../../App';
@@ -60,7 +61,8 @@ function buildPrompt(t: CaseRecord, p: Precedent): string {
     `\nOUTPUT RULES:\n` +
     `- 3–5 concise, specific steps, ordered by impact. One step per line, no numbering.\n` +
     `- These are DELIVERABILITY RECOMMENDATIONS, not team assignments. Do NOT prefix steps with an owner/team (no "Customer Email Ops:", "Deliverability Team:", etc.) and do NOT direct steps to internal teams unless a step genuinely cannot be done by the customer.\n` +
-    `- The customer performs their own actions: DNS records at their DNS provider; segments, suppression, cadence, content and warm-up in Braze; and their own provider (e.g. Microsoft) escalations. Treat in-Braze technical configuration as the only "Email Ops"-type setup, and phrase it as a configuration step, not as someone acting on the customer's behalf.\n` +
+    `- The customer performs their own actions: DNS records at their DNS provider; segments, suppression, cadence, content and warm-up in Braze; and their own recipient mailbox-provider escalations, e.g. Microsoft/Outlook, Gmail/Google, Yahoo/AOL, or Apple/iCloud when those providers are blocking/deferring mail.\n` +
+    `- Customers do NOT have direct access to SparkPost, SendGrid, Amazon SES, MTA consoles, or Braze-managed IP tooling. Never tell the customer to log into or change those systems; put Braze infrastructure changes under internal/cross-team follow-up if they are needed.\n` +
     `- Be concrete: name the actual record/threshold/segment/cadence. No vague filler like "improve reputation". Do not expose any other customer's identity.`
   );
 }

@@ -23,6 +23,8 @@ export interface ScreenContext {
   data?: ScreenContextDatum[];
   /** free-form blob used to ground free-text answers */
   raw?: string;
+  /** canonical User Guide article path when a guide article is focused */
+  guidePath?: string;
   /** identity of the focused record — drives historical-ticket retrieval */
   recordId?: string;
   accountKey?: string;

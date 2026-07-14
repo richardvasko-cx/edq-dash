@@ -13,7 +13,35 @@
 export const CASE_DATASET_URL = '/data/uk_supermarket_email_deliverability_cases_final.csv';
 
 export type CaseStatus = 'Open' | 'In Progress' | 'Closed';
-export type CaseOwner = 'Richard V.' | 'Adrian N.' | 'Bill M.';
+export const ASSIGNABLE_CASE_OWNERS = [
+  'Alexandre Zibrick',
+  'Austin Currin',
+  'Brandon Blair',
+  'Bryant Gregory',
+  'Chris Mcgraw',
+  'Daniel Stone',
+  'Darren Lindsay',
+  'Eric Stelle',
+  'Ess Adjekum',
+  'Esther Davis',
+  'Hailey Wade',
+  'José Ramón García Layos',
+  'Justin Rodriguez',
+  'Kimberly Paxton',
+  'Lydia Vazquez',
+  'Mike Auldredge',
+  'Nikita Sambrekar',
+  'Pooja Raje',
+  'Richard Ibrahim',
+  'Richard Vasko',
+  'Song Soon Yang',
+  'Sophie Jean Saint-Julien',
+  'Stephanie Wooldridge',
+  'Steve Butcher',
+  'Tamara Wulf',
+] as const;
+
+export type CaseOwner = (typeof ASSIGNABLE_CASE_OWNERS)[number];
 export type CommType = 'chat' | 'email';
 export type AuthStatus = 'PASS' | 'WARN' | 'FAIL' | string;
 
@@ -354,7 +382,7 @@ export function parseCaseDataset(csvText: string): DatasetParseResult {
     if (seenCases.has(rec.case_number)) errors.push(`Row ${r}: duplicate case_number ${rec.case_number}.`);
     if (seenAccounts.has(rec.account_id)) errors.push(`Row ${r}: duplicate account_id ${rec.account_id}.`);
     if (!['Open', 'In Progress', 'Closed'].includes(rec.case_status)) errors.push(`Row ${r}: invalid case_status "${rec.case_status}".`);
-    if (!['Richard V.', 'Adrian N.', 'Bill M.'].includes(rec.case_owner)) errors.push(`Row ${r}: invalid case_owner "${rec.case_owner}".`);
+    if (!ASSIGNABLE_CASE_OWNERS.includes(rec.case_owner)) errors.push(`Row ${r}: invalid case_owner "${rec.case_owner}".`);
     if (/\s/.test(rec.contact_name.trim())) errors.push(`Row ${r}: contact_name "${rec.contact_name}" should be a first name only.`);
     if (!rec.subaccounts.some(s => /^braze/i.test(s))) errors.push(`Row ${r}: no braze-prefixed subaccount.`);
     if (rec.mailbox_providers.length < 5) errors.push(`Row ${r}: fewer than 5 mailbox providers.`);

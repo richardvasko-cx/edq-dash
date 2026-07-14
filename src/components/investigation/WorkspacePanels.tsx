@@ -55,6 +55,7 @@ const mdToHtml = (md: string) => ({ __html: marked.parse(escapeBareTags(md || ''
 
 // Canonical metrics are decimals (0–1); render as a percent string.
 const pct = (v: number) => (v * 100).toFixed(1) + '%';
+const possessive = (name: string) => (name.endsWith('s') || name.endsWith('S') ? `${name}'` : `${name}'s`);
 
 type FinalRefineMode = 'shorter' | 'technical' | 'data';
 
@@ -67,7 +68,39 @@ interface PersistedWorkspace {
   state: WorkspaceState;
   autoGen: WorkspacePanelId[];
   resolution: string | null;
+  consultantEvidence?: ConsultantEvidence[];
+  informationGateComplete?: boolean;
+  informationGateVersion?: string;
 }
+
+type InformationPriority = 'required' | 'recommended' | 'optional';
+interface ConsultantEvidence {
+  id: string;
+  question: string;
+  answer: string;
+  priority: InformationPriority;
+  impacts: WorkspacePanelId[];
+  addedAt: string;
+  skipped?: boolean;
+}
+
+interface InformationRequest {
+  id: string;
+  title: string;
+  question: string;
+  why: string;
+  priority: InformationPriority;
+  impacts: WorkspacePanelId[];
+  choices: string[];
+  checked: string[];
+}
+
+interface ReviewTarget {
+  section: 'Overview' | 'Authentication' | 'Deliverability' | 'Email Performance' | 'Support History';
+  panelLabel: string;
+  buttonLabel: string;
+}
+const INFORMATION_GATE_VERSION = 'ticket-evidence-v2';
 const WS_STORE_KEY = (id?: string | null) => `edq.workspace.${id ?? 'none'}`;
 function loadWorkspace(id?: string | null): PersistedWorkspace | null {
   if (!id || typeof sessionStorage === 'undefined') return null;
@@ -79,6 +112,212 @@ function loadWorkspace(id?: string | null): PersistedWorkspace | null {
 function saveWorkspace(id: string | null | undefined, data: PersistedWorkspace) {
   if (!id || typeof sessionStorage === 'undefined') return;
   try { sessionStorage.setItem(WS_STORE_KEY(id), JSON.stringify(data)); } catch { /* quota / serialization — non-fatal */ }
+}
+function savedInformationGateIsCurrent(saved: PersistedWorkspace | null) {
+  return saved?.informationGateVersion === INFORMATION_GATE_VERSION;
+}
+
+function mailboxProviderLabel(domain: string | undefined): string {
+  const d = (domain || '').toLowerCase();
+  if (/outlook|hotmail|live\.com|msn|microsoft/.test(d)) return 'Microsoft/Outlook';
+  if (/gmail|google/.test(d)) return 'Gmail';
+  if (/yahoo|aol|verizon/.test(d)) return 'Yahoo/AOL';
+  if (/icloud|me\.com|mac\.com|apple/.test(d)) return 'Apple/iCloud';
+  return domain || 'the mailbox provider';
+}
+
+const normalizeEvidenceText = (parts: Array<string | string[] | undefined | null>) =>
+  parts.flatMap(part => Array.isArray(part) ? part : [part]).filter(Boolean).join(' ').toLowerCase();
+
+function ticketEvidenceText(ticket: CaseRecord) {
+  return normalizeEvidenceText([
+    ticket.case_subject,
+    ticket.case_description,
+    ticket.issue_type,
+    ticket.root_cause_summary,
+    ticket.resolution_summary,
+    ticket.tags,
+    ticket.recommended_actions,
+    ticket.diagnostics?.map(item => `${item.title} ${item.description} ${item.status}`),
+    ticket.bounces?.map(item => `${item.domain} ${item.category} ${item.classification} ${item.reason}`),
+  ]);
+}
+
+function threadEvidenceText(ticket: CaseRecord) {
+  return normalizeEvidenceText(ticket.case_thread?.map(item => `${item.subject} ${item.message} ${item.sender_name} ${item.recipient_name}`));
+}
+
+function hasThreadAnswer(thread: string, pattern: RegExp) {
+  return pattern.test(thread);
+}
+
+function highValueRequestsOnly(requests: InformationRequest[]) {
+  const seen = new Set<string>();
+  return requests.filter(request => {
+    if (seen.has(request.id)) return false;
+    seen.add(request.id);
+    return true;
+  }).slice(0, 3);
+}
+
+// The Workspace gate is a pre-flight evidence review. It should not be a generic
+// checklist: it asks only for a missing customer decision that is likely to change
+// the generated RCA, actions, or final handoff.
+function informationRequestsFor(ticket: CaseRecord | null): InformationRequest[] {
+  if (!ticket) return [];
+  const topBounce = ticket.bounces?.[0];
+  const topSignal = topBounce ? `${topBounce.classification} at ${topBounce.domain}` : 'the dominant delivery signal';
+  const mailboxProvider = mailboxProviderLabel(topBounce?.domain || ticket.mailbox_providers?.[0]);
+  const m = ticket.metrics;
+  const evidence = ticketEvidenceText(ticket);
+  const thread = threadEvidenceText(ticket);
+  const allEvidence = `${evidence} ${thread}`;
+  const requests: InformationRequest[] = [];
+
+  const volumeIsCentral = /\b(volume|ramp|warm|warming|cadence|frequency|burst|spike|throughput|send rate|hourly|daily)\b/.test(evidence);
+  const volumeAlreadyExplained = hasThreadAnswer(allEvidence, /\b(planned|scheduled|agreed|expected|intended|confirmed|exceeded|doubled|expanded|increased|burst|spike|ramp|warm(?:ing)?)\b/);
+  if (volumeIsCentral && !volumeAlreadyExplained) {
+    requests.push({
+      id: `volume-plan-${ticket.case_number}`,
+      title: `Confirm send-plan context for ${ticket.account_name}`,
+      question: `Was ${possessive(ticket.account_name)} volume, cadence, or audience ramp expected for this send window?`,
+      why: `This changes whether Gemini treats the ${pct(m.delayed_rate)} delayed rate and ${topSignal} as expected ramp pressure or an unexpected traffic change that needs investigation.`,
+      priority: 'required',
+      impacts: ['rootCause', 'recommendedActions', 'finalResponse'],
+      choices: ['Expected', 'Unexpected', 'Partially expected', 'Not known'],
+      checked: ['Ticket description', 'Customer thread', 'Deliverability metrics', 'Support history'],
+    });
+  }
+
+  const providerBlock = /\b(microsoft|outlook|hotmail|gmail|google|yahoo|aol|icloud|apple)\b/.test(evidence) &&
+    /\b(block|blocked|sender reputation|ip reputation|shared ip reputation|complaint reputation|policy rejection|policy rejections|s3140|s3150|550 5\.7\.1|554 message refused)\b/.test(evidence);
+  const providerIssueIsCustomerMitigatable = !/\b(mailbox full|over quota|invalid recipient|user unknown|recipient mailbox|not indicating an ip block|not an ip block|not causal)\b/.test(evidence);
+  const providerMitigationAlreadyKnown = hasThreadAnswer(thread, /\b(sender support|postmaster|mitigation|delist|delisting|unblock|provider support|request has been received|submitted|opened|raised|replied|response from|ticket)\b/);
+  if (providerBlock && providerIssueIsCustomerMitigatable && !providerMitigationAlreadyKnown) {
+    requests.push({
+      id: `mailbox-provider-mitigation-${ticket.case_number}`,
+      title: `Confirm ${mailboxProvider} mitigation status`,
+      question: `Has ${ticket.account_name} already submitted or started a mailbox-provider mitigation request for ${mailboxProvider}?`,
+      why: `This changes whether Gemini recommends a new mailbox-provider mitigation request or references an existing one while handling the ${topSignal} pattern.`,
+      priority: 'recommended',
+      impacts: ['recommendedActions', 'finalResponse'],
+      choices: ['Yes', 'No', 'Unknown'],
+      checked: ['Ticket description', 'Customer thread', 'Support history', 'Internal guidance'],
+    });
+  }
+
+  const audienceIsCentral = /\b(audience|segment|cohort|dormant|inactive|unengaged|suppression|consent|preference|migration|old addresses|stale|imported)\b/.test(evidence);
+  const audienceAlreadyExplained = hasThreadAnswer(allEvidence, /\b(confirmed|blank values|mapped|legacy|suppression|opted|inactive|dormant|recent purchasers|explicit opt|old addresses|migration|cohort)\b/);
+  if (audienceIsCentral && !audienceAlreadyExplained) {
+    requests.push({
+      id: `audience-source-${ticket.case_number}`,
+      title: `Confirm affected audience source for ${ticket.account_name}`,
+      question: `Which audience, segment, import, or consent change created the affected recipient group?`,
+      why: `This decides whether Gemini frames ${topSignal} as a list-quality, consent, or targeting issue rather than a platform delivery fault.`,
+      priority: 'required',
+      impacts: ['rootCause', 'emailPerformanceFindings', 'recommendedActions', 'finalResponse'],
+      choices: ['Known segment', 'Recent import or migration', 'Consent or suppression change', 'Not known'],
+      checked: ['Ticket description', 'Customer thread', 'Email performance', 'Support history'],
+    });
+  }
+
+  const authIssue = /\b(dmarc|spf|dkim|dns|rua|return-path|alignment|reporting)\b/.test(evidence) && /warn|fail|missing|not published|stopped|not receiving|policy p=none|none\b/.test(evidence);
+  const authAlreadyActioned = hasThreadAnswer(thread, /\b(published|updated|added|authori[sz]ation|confirmed.*record|confirmed.*dns|report receipt|corrected)\b/);
+  if (authIssue && !authAlreadyActioned) {
+    requests.push({
+      id: `auth-change-${ticket.case_number}`,
+      title: `Confirm authentication change ownership for ${ticket.account_name}`,
+      question: `Can the customer confirm who will publish or update the required DNS/authentication record?`,
+      why: `This changes whether Gemini lists the authentication item as a customer DNS action or an internal Braze platform follow-up.`,
+      priority: ticket.dmarc_status === 'FAIL' || ticket.spf_status === 'FAIL' || ticket.dkim_status === 'FAIL' ? 'required' : 'recommended',
+      impacts: ['authenticationFindings', 'recommendedActions', 'finalResponse'],
+      choices: ['Customer DNS owner', 'Braze/internal ticket', 'Already updated', 'Not known'],
+      checked: ['Authentication scan', 'Ticket thread', 'Support history'],
+    });
+  }
+
+  const complaintIssue = /\b(complaint|spam complaint|feedback|fbl|user feedback)\b/.test(evidence) || m.spam_complaint_rate >= 0.001;
+  const complaintCauseKnown = hasThreadAnswer(allEvidence, /\b(consent|preference|frequency|content|dormant|inactive|complaint increase is concentrated|cohort|suppression|reintroduced)\b/);
+  if (complaintIssue && !complaintCauseKnown) {
+    requests.push({
+      id: `complaint-driver-${ticket.case_number}`,
+      title: `Confirm complaint driver for ${ticket.account_name}`,
+      question: `Is the complaint increase tied to a known content, consent, frequency, or audience change?`,
+      why: `This affects whether Gemini recommends content/list remediation, suppression correction, or a mailbox-provider recovery path.`,
+      priority: 'recommended',
+      impacts: ['rootCause', 'emailPerformanceFindings', 'recommendedActions', 'finalResponse'],
+      choices: ['Content change', 'Consent or suppression change', 'Frequency or audience change', 'Not known'],
+      checked: ['Ticket description', 'Customer thread', 'Email performance', 'Support history'],
+    });
+  }
+
+  return highValueRequestsOnly(requests);
+}
+
+function reviewTargetFor(request: InformationRequest, ticket: CaseRecord | null): ReviewTarget | null {
+  if (!ticket) return null;
+  const requestText = [
+    request.id,
+    request.title,
+    request.question,
+    request.why,
+  ].join(' ').toLowerCase();
+  const ticketText = [
+    ticket.case_subject,
+    ticket.root_cause_summary,
+    ...(ticket.tags ?? []),
+    ...(ticket.bounces ?? []).map(item => `${item.classification} ${item.reason} ${item.domain}`),
+  ].join(' ').toLowerCase();
+  const combined = `${requestText} ${ticketText}`;
+
+  if (request.id.startsWith('audience-source-')) {
+    return { section: 'Support History', panelLabel: 'Case Thread (Support History)', buttonLabel: 'Review' };
+  }
+
+  if (request.id.startsWith('complaint-driver-')) {
+    return { section: 'Email Performance', panelLabel: 'Complaint Rate', buttonLabel: 'Review' };
+  }
+
+  if (request.id.startsWith('auth-change-')) {
+    return { section: 'Support History', panelLabel: 'Case Thread (Support History)', buttonLabel: 'Review' };
+  }
+
+  if (/volume|ramp|cadence|frequency|send-plan/.test(requestText)) {
+    return { section: 'Deliverability', panelLabel: 'Volume by day', buttonLabel: 'Review' };
+  }
+
+  if (/mailbox-provider|mitigation|delist|unblock|sender support/.test(requestText)) {
+    return { section: 'Support History', panelLabel: 'Case Thread (Support History)', buttonLabel: 'Review' };
+  }
+
+  if (/spf|dkim|dmarc|auth|dns|return-path|ptr|rdns/.test(combined)) {
+    return { section: 'Authentication', panelLabel: 'Authentication Scan', buttonLabel: 'Review' };
+  }
+
+  if (/reported|customer said|customer issue|client|ticket description|case subject/.test(requestText)) {
+    return { section: 'Overview', panelLabel: 'Ticket Info', buttonLabel: 'Review' };
+  }
+
+  if (/open|click|complaint|spam|unsubscribe|engagement|ctor/.test(requestText)) {
+    if (/complaint|spam/.test(requestText)) return { section: 'Email Performance', panelLabel: 'Complaint Rate', buttonLabel: 'Review' };
+    if (/click|ctor/.test(requestText)) return { section: 'Email Performance', panelLabel: 'Unique Click Rate', buttonLabel: 'Review' };
+    if (/unsubscribe/.test(requestText)) return { section: 'Email Performance', panelLabel: 'Unsubscribe Rate', buttonLabel: 'Review' };
+    return { section: 'Email Performance', panelLabel: 'Unique Open Rate', buttonLabel: 'Review' };
+  }
+
+  if (/deferr|throttl|rate limit|4\.7\.28|temporar/.test(combined)) {
+    return { section: 'Deliverability', panelLabel: 'Deferrals by ISP and Reason', buttonLabel: 'Review' };
+  }
+
+  if (/block|hotmail|outlook|microsoft|gmail|yahoo|reputation/.test(combined)) {
+    return { section: 'Deliverability', panelLabel: 'Deferred Events by ISP', buttonLabel: 'Review' };
+  }
+
+  if (/bounce|hardbounce|invalid recipient|mailbox unavailable/.test(combined)) {
+    return { section: 'Deliverability', panelLabel: 'Bounce Class by ISP and Reason', buttonLabel: 'Review' };
+  }
+
+  return { section: 'Support History', panelLabel: 'Support History', buttonLabel: 'Review' };
 }
 
 // Phase labels shown while the Final Customer Response is generated. The model is
@@ -172,11 +411,14 @@ function resolveArticlePath(keys: string, files: any[]): string | null {
 // this — they list the full technical steps regardless of who performs them.)
 const BRAZE_PLATFORM_CONTEXT =
 `=== EDS / OWNERSHIP CONTEXT — how to assign each action (this note goes to the INTERNAL team, never the customer) ===
-- The EDS (Email Deliverability Services) team only INVESTIGATES and RECOMMENDS in this note. EDS does NOT contact the end customer, does NOT submit provider (Microsoft/Google) tickets, delisting or escalation follow-ups on the customer's behalf, and does NOT actively monitor the account. The internal colleague (CSM/support) relays findings to the customer and raises tickets to other teams when the case needs them. So NEVER write "we will submit…", "we will monitor…", or "we will coordinate with the customer".
-- The CUSTOMER only has the Braze dashboard + Looker (no direct SparkPost/SendGrid/Amazon SES/MTA/IP provider-console access). Assign to the CUSTOMER (phrased for the colleague to relay): fix/publish their DNS authentication records (SPF/DKIM/DMARC) at their DNS provider; advance their DMARC policy; manage list hygiene, segments/suppression, content and sending cadence in Braze; warm the sending domain; SUBMIT any mailbox-provider mitigation/delisting request themselves (e.g. the Microsoft Office 365 / Outlook.com Sender Support form) and follow up on it; and MONITOR results via their scheduled Looker reports and data in Braze.
+- The EDS (Email Deliverability Services) team only INVESTIGATES and RECOMMENDS in this note. EDS does NOT contact the end customer, does NOT submit mailbox-provider (Microsoft/Google/Yahoo/Apple) tickets, delisting or escalation follow-ups on the customer's behalf, and does NOT actively monitor the account. The internal colleague (CSM/support) relays findings to the customer and raises tickets to other teams when the case needs them. So NEVER write "we will submit…", "we will monitor…", or "we will coordinate with the customer".
+- The CUSTOMER only has the Braze dashboard + Looker (no direct SparkPost/SendGrid/Amazon SES/MTA/IP provider-console access). Assign to the CUSTOMER (phrased for the colleague to relay): fix/publish their DNS authentication records (SPF/DKIM/DMARC) at their DNS provider; advance their DMARC policy; manage list hygiene, segments/suppression, content and sending cadence in Braze; warm the sending domain; submit mailbox-provider mitigation/unblock requests only to mailbox providers such as Microsoft/Outlook, Gmail/Google, Yahoo/AOL or Apple/iCloud when those providers are the blocking/deferring party; and MONITOR results via their scheduled Looker reports and data in Braze.
 - Microsoft SNDS/JMRP are already configured at the Braze platform level — do NOT tell anyone to enroll, and do NOT claim EDS monitors them.
 - Some fixes need a Braze-side platform change the customer cannot make (e.g. an aligned custom Return-Path / bounce domain in the sending infrastructure). Put these under "To raise internally" — the CSM should raise a ticket to the appropriate Braze team. Do NOT tell the customer to do them directly in SparkPost, SendGrid, or Amazon SES.
 - Group every recommendation under "For the customer to action (relay to them)" or "To raise internally (cross-team / platform ticket)". Never assign the customer a tool they can't access, and never invent capabilities.`;
+
+const CUSTOMER_INFRA_ACCESS_RULE =
+  'Customers do not have direct access to SparkPost, SendGrid, Amazon SES, MTA consoles, or Braze-managed IP/provider tooling. Never tell the customer to log into or change those systems. Customer-facing steps must be limited to their DNS provider, Braze, Looker, and recipient mailbox-provider channels such as Microsoft/Outlook, Gmail/Google, Yahoo/AOL, or Apple/iCloud.';
 
 // Redacted precedent from the most similar resolved case on ANOTHER account — the
 // same "match reference" the Overview's Suggested Next Steps shows. No PII: only the
@@ -202,7 +444,7 @@ function remediationPlaybook(t: CaseRecord): string {
     blocks.push(
 `MICROSOFT (Outlook/Hotmail) block — 550 5.7.1 / [S3140]:
 - Microsoft SNDS and JMRP are already configured by Braze at onboarding; the Braze team monitors complaint, trap-hit and reputation data — the customer does NOT need to enroll.
-- The Braze team submits the mitigation/delisting request via the Microsoft Office 365 / Outlook.com Sender Support form, quoting the exact "550 5.7.1 ... [S3140]" error and the sending IP.
+- The customer submits the mitigation/delisting request via the Microsoft Office 365 / Outlook.com Sender Support form, quoting the exact "550 5.7.1 ... [S3140]" error and the sending IP; Braze provides the evidence and wording to relay.
 - As this followed a sending-domain change, the customer should warm the new domain into Microsoft: start with their most-engaged Outlook/Hotmail recipients at low volume and ramp over 2–4 weeks.`);
   }
   if (has(/gmail|google/) && has(/421|defer|throttl|unusual rate|4\.7\.28/)) {
@@ -470,7 +712,7 @@ function StatusChip({ status }: { status: WorkspacePanelStatus }) {
   );
 }
 
-export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: CaseRecord | null; onJumpSection?: (s: string) => void }) {
+export default function WorkspacePanels({ ticket, onJumpSection, onJumpPanel }: { ticket: CaseRecord | null; onJumpSection?: (s: string) => void; onJumpPanel?: (section: ReviewTarget['section'], panelLabel: string) => void }) {
   const ctx = useContext(AiPanelContext);
   const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
   const { cases } = useCaseDataset();
@@ -480,6 +722,7 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
   const [state, setState] = useState<WorkspaceState>(() => loadWorkspace(ticket?.case_number)?.state ?? initWorkspaceState(suggestions));
 
   const [editingId, setEditingId] = useState<WorkspacePanelId | null>(null);
+  const [copiedPanelId, setCopiedPanelId] = useState<WorkspacePanelId | null>(null);
   const [draft, setDraft] = useState('');
   // Consultant-only advisory from a Clean up pass — flags points the consultant
   // raised that the ticket data can't support. Shown beside the editor, never
@@ -499,6 +742,18 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
   const [regenPending, setRegenPending] = useState<WorkspacePanelId | null>(null);
   const [showStatusMenu, setShowStatusMenu] = useState(false);
   const [resolution, setResolution] = useState<string | null>(() => loadWorkspace(ticket?.case_number)?.resolution ?? null);
+  const [consultantEvidence, setConsultantEvidence] = useState<ConsultantEvidence[]>(() => {
+    const saved = loadWorkspace(ticket?.case_number);
+    return savedInformationGateIsCurrent(saved) ? saved?.consultantEvidence ?? [] : [];
+  });
+  const [informationGateComplete, setInformationGateComplete] = useState(() => {
+    const saved = loadWorkspace(ticket?.case_number);
+    return savedInformationGateIsCurrent(saved) ? saved?.informationGateComplete ?? false : false;
+  });
+  const [expandedInformationId, setExpandedInformationId] = useState<string | null>(null);
+  const [informationChoice, setInformationChoice] = useState('');
+  const [informationDetail, setInformationDetail] = useState('');
+  const [workspaceUpdate, setWorkspaceUpdate] = useState<string | null>(null);
   const [authCheck, setAuthCheck] = useState<TicketAuthCheck | null>(null);
   const getGoogleAuthEvidence = async (caseRecord: CaseRecord) => {
     try {
@@ -516,6 +771,8 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
   // `gen` tracks the one panel currently streaming; only the Final panel persists
   // hyperlinked article cards.
   const [gen, setGen] = useState<{ id: WorkspacePanelId | null; phase: 'loading' | 'streaming'; streamText: string }>({ id: null, phase: 'loading', streamText: '' });
+  const [panelThinking, setPanelThinking] = useState<Partial<Record<WorkspacePanelId, string[]>>>({});
+  const [openThinkingPanel, setOpenThinkingPanel] = useState<WorkspacePanelId | null>(null);
   // Synced User Guide files — used to resolve suggested-article links in the Final panel.
   const [guideFiles, setGuideFiles] = useState<any[]>([]);
   useEffect(() => {
@@ -538,22 +795,31 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
   // generation over content the user already reviewed.
   useEffect(() => {
     const saved = loadWorkspace(ticket?.case_number);
+    const infoGateCurrent = savedInformationGateIsCurrent(saved);
     setState(saved?.state ?? initWorkspaceState(suggestions));
     setResolution(saved?.resolution ?? null);
+    setConsultantEvidence(infoGateCurrent ? saved?.consultantEvidence ?? [] : []);
+    setInformationGateComplete(infoGateCurrent ? saved?.informationGateComplete ?? false : false);
+    setExpandedInformationId(null);
+    setInformationChoice('');
+    setInformationDetail('');
+    setWorkspaceUpdate(null);
     setAuthCheck(null);
     autoGenRef.current = new Set(saved?.autoGen ?? []);
     setPregenDone(new Set(saved?.autoGen ?? []));
     retryCountRef.current = {};
     pregenStartedRef.current = false; // re-arm background pre-gen for the new ticket
     setGen({ id: null, phase: 'loading', streamText: '' });
+    setPanelThinking({});
+    setOpenThinkingPanel(null);
     setEditingId(null);
     setCleanupClaims([]); setCleanupConfirmation(null); setCleanupEvidence([]); setCleanupGrounding(null);
   }, [ticket?.case_number]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Mirror flow progress to sessionStorage whenever it changes.
   useEffect(() => {
-    saveWorkspace(ticket?.case_number, { state, autoGen: Array.from(autoGenRef.current) as WorkspacePanelId[], resolution });
-  }, [state, resolution, ticket?.case_number]);
+    saveWorkspace(ticket?.case_number, { state, autoGen: Array.from(autoGenRef.current) as WorkspacePanelId[], resolution, consultantEvidence, informationGateComplete, informationGateVersion: INFORMATION_GATE_VERSION });
+  }, [state, resolution, consultantEvidence, informationGateComplete, ticket?.case_number]);
 
   useEffect(() => {
     if (!ticket) return;
@@ -592,38 +858,41 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
     const dominant = top ? `${top.classification} at ${top.domain}, reason "${top.reason}"` : 'the main bounce/defer signal';
     const sendingDomain = t.sending_domains[0];
     const m = t.metrics;
+    const consultantContext = consultantEvidence.length
+      ? `\n=== CONSULTANT-CONFIRMED CONTEXT ===\n${consultantEvidence.map(item => `- ${item.question} ${item.answer}${item.addedAt ? ` (confirmed ${item.addedAt})` : ''}`).join('\n')}\nUse this only where it materially affects the section. Do not imply unconfirmed facts beyond it.\n`
+      : '';
 
     switch (id) {
       case 'customerIssue':
         return (
           `Restate the customer's reported issue for an internal note, using ONLY these ticket details:\n` +
           `- Account: ${t.account_name} (${t.platform_edition})\n- Sending via: ${provider}, domain ${sendingDomain}\n- Reported: "${t.case_subject}"\n- Impact described: ${t.root_cause_summary}\n- Headline movement: open rate ${pct(m.nonprefetched_open_rate)}\n\n` +
-          `Write one short framing sentence, then 3–5 tight bullets of just these facts. Do NOT diagnose, analyse, recommend, list other metrics, or add any next step — only present what was reported.`
+          `Write one short framing sentence, then 3–5 tight bullets of just these facts. Do NOT diagnose, analyse, recommend, list other metrics, or add any next step — only present what was reported.` + consultantContext
         );
       case 'rootCause':
         return (
           `Determine the single most likely ROOT CAUSE of THIS case only. Do not reference any other account or past case.\n` +
           `- Issue: "${t.case_subject}" — ${t.root_cause_summary}\n- Delivery ${pct(m.accepted_rate)}, bounce ${pct(m.bounce_rate)}\n- Open ${pct(m.nonprefetched_open_rate)}, spam ${pct(m.spam_complaint_rate)}\n- Authentication: ${authLine}\n` +
           (top ? `- Dominant bounce/defer: ${top.classification} at ${top.domain} — "${top.reason}"\n` : '') +
-          `\nOutput: one **bold one-line verdict**, then 2–4 evidence bullets that cite the actual numbers/codes, then a final line exactly "Confidence: High" / "Medium" / "Low". No other sections, no recommendations.`
+          `\nOutput: one **bold one-line verdict**, then 2–4 evidence bullets that cite the actual numbers/codes, then a final line exactly "Confidence: High" / "Medium" / "Low". No other sections, no recommendations.` + consultantContext
         );
       case 'authenticationFindings':
         return (
           `Evaluate authentication for THIS case using the Google Dig scan below, not just the CSV status. Data: ${authLine}.\n` +
-          `If all mechanisms pass, say authentication is not contributing and name what was checked. If any mechanism fails or is missing, explain ONLY the failing or warning mechanism(s): what is wrong, how it affects deliverability, and the one-line fix. 2–4 sentences or bullets.`
+          `If all mechanisms pass, say authentication is not contributing and name what was checked. If any mechanism fails or is missing, explain ONLY the failing or warning mechanism(s): what is wrong, how it affects deliverability, and the one-line fix. 2–4 sentences or bullets.` + consultantContext
         );
       case 'deliverabilityFindings':
         return (
           `Give an EXPANDED, data-driven deliverability analysis for this case (no auth, no open/spam engagement, no next-step list). Lead with the data, then interpret it:\n` +
           `- Delivery rate ${pct(m.accepted_rate)}, bounce rate ${pct(m.bounce_rate)}, sourced from ${provider}.\n` +
           `- Dominant pattern: ${dominant}.\n\n` +
-          `Structure: a **bold one-line headline**, then 3–5 bullets that quote the actual numbers/codes and explain what each signal means for this sender, then a final "**Best practice:**" line with the most relevant remediation for that pattern. Be specific and quantitative — embed the data, don't just restate it.`
+          `Structure: a **bold one-line headline**, then 3–5 bullets that quote the actual numbers/codes and explain what each signal means for this sender, then a final "**Best practice:**" line with the most relevant remediation for that pattern. Be specific and quantitative — embed the data, don't just restate it.` + consultantContext
         );
       case 'emailPerformanceFindings':
         return (
           `Give an EXPANDED, data-driven engagement analysis for this case (no delivery/bounce, no auth, no next-step list). Lead with the data, then interpret it:\n` +
           `- Open rate ${pct(m.nonprefetched_open_rate)}, spam complaints ${pct(m.spam_complaint_rate)}, sourced from ${provider}.\n\n` +
-          `Structure: a **bold one-line headline**, then 3–5 bullets that quote the actual rates and explain what the movement indicates (e.g. throttling, content/list quality, reputation), then a final "**Best practice:**" line with the most relevant engagement remediation. Be specific and quantitative — embed the data, don't just restate it.`
+          `Structure: a **bold one-line headline**, then 3–5 bullets that quote the actual rates and explain what the movement indicates (e.g. throttling, content/list quality, reputation), then a final "**Best practice:**" line with the most relevant engagement remediation. Be specific and quantitative — embed the data, don't just restate it.` + consultantContext
         );
       case 'supportHistoryContext':
         return (
@@ -631,17 +900,18 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
           `Using the SIMILAR PAST CASES provided in your context (this account at full fidelity, other accounts anonymised), surface precedent. ` +
           `Start with one italic line exactly: "_All cross-account precedents are anonymised — no other customer's identifiers are shown._" ` +
           `Then 2–4 bullets, one per precedent: "**<short case label>** — Root cause: <…>; Resolution: <what fixed it>." ` +
-          `Do not invent precedents; if none are provided, say so in one line.`
+          `Do not invent precedents; if none are provided, say so in one line.` + consultantContext
         );
       case 'recommendedActions': {
         const playbook = remediationPlaybook(t);
         return (
           `Produce the internal action plan from ALL the evidence for this case: issue "${t.case_subject}"; delivery ${pct(m.accepted_rate)}; bounce ${pct(m.bounce_rate)}; open ${pct(m.nonprefetched_open_rate)}; spam ${pct(m.spam_complaint_rate)}; auth ${authLine}${top ? `; dominant ${top.classification} at ${top.domain}` : ''}.\n\n` +
+          `PLATFORM ACCESS RULE: ${CUSTOMER_INFRA_ACCESS_RULE} Put Braze infrastructure changes under internal/cross-team follow-up.\n\n` +
           (playbook
             ? `Base the steps on this REMEDIATION PLAYBOOK for the exact signals in this case — use these specific, named actions (tools, forms, records, thresholds, sequencing):\n${playbook}\n\n`
             : '') +
           `Output a numbered list of 3–5 steps, ordered by impact. Each step: a **bold imperative action**, then a half-line of why referencing the specific data/error code. ` +
-          `Be CONCRETE — name the actual tool/form/record/threshold to use. Do NOT write generic filler like "investigate IP reputation", "address the underlying reputation", or "work with your ESP on reputation". No intro line, no customer-facing wording, no closing summary.`
+          `Be CONCRETE — name the actual tool/form/record/threshold to use. Do NOT write generic filler like "investigate IP reputation", "address the underlying reputation", or "work with your ESP on reputation". No intro line, no customer-facing wording, no closing summary.` + consultantContext
         );
       }
       case 'finalResponse': {
@@ -653,7 +923,7 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
           `1. Start with "Hi team," then one short paragraph introducing the handoff for ${t.case_number} (${t.account_name}) and the core issue.\n` +
           `2. "**What we found:**" — one paragraph grounded in the EXACT metrics and error codes: accepted rate ${pct(m.accepted_rate)}, bounce rate ${pct(m.bounce_rate)}, first-attempt delay ${pct(m.delayed_rate)}, confirmed open ${pct(m.nonprefetched_open_rate)}, complaint rate ${pct(m.spam_complaint_rate)}${top ? `, and the dominant signal "${top.reason}" at ${top.domain}` : ''}. Quote the real numbers exactly; never invent or round away figures and do NOT mention "trends" (none are recorded).\n` +
           `3. "**What it means:**" — one short interpretation paragraph.\n` +
-          `4. "**For the customer to action (relay to them):**" — a bullet list. The customer submits their OWN provider mitigation/delisting requests and monitors recovery via their scheduled Looker reports / data in Braze. Each step names the concrete tool/form/record/threshold.\n` +
+          `4. "**For the customer to action (relay to them):**" — a bullet list. The customer submits their OWN recipient mailbox-provider mitigation/delisting requests only where the mailbox provider is the blocking/deferring party, and monitors recovery via their scheduled Looker reports / data in Braze. Each step names the concrete tool/form/record/threshold.\n` +
           `5. "**To raise internally (cross-team / platform ticket):**" — a bullet list for anything the customer cannot do themselves (e.g. a Braze-side platform change) that the colleague should raise to the right team.\n` +
           `6. End with "Let me know if you have any questions on these steps."\n\n` +
           `OWNERSHIP — EDS is advisory: do NOT write "we will submit/monitor/coordinate", do NOT claim we monitor the account or contact the customer. Do NOT write vague filler like "investigate the reputation of your sending IP". Translate the playbook below into specific steps in the correct ownership group. Aim for ~350–450 words.\n\n` +
@@ -662,7 +932,7 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
           `=== APPROVED FINDINGS ===\n` +
           (approved.length
               ? approved.map(p => `## ${p.title}\n${p.content.slice(0, 900)}`).join('\n\n')
-                : `Issue: ${t.case_subject}\nRoot cause: ${t.root_cause_summary}`)
+                : `Issue: ${t.case_subject}\nRoot cause: ${t.root_cause_summary}`) + consultantContext
         );
       }
       default:
@@ -682,12 +952,20 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
     genChainRef.current = run.catch(() => undefined);
     return run;
   };
+
+  const askGeminiAboutPanel = (id: WorkspacePanelId, title: string) => {
+    if (!ticket) return;
+    ctx.openPill(promptFor(id, title, ticket), `${title} · ${ticket.account_name} · ${ticket.case_number}`);
+  };
+
   const generatePanelInner = async (id: WorkspacePanelId, title: string, auto = false): Promise<string> => {
     if (!ticket) return '';
 
     genStartRef.current = Date.now();
     setGen({ id, phase: 'loading', streamText: '' });
+    setPanelThinking(current => ({ ...current, [id]: [] }));
     let answer = '';
+    let thinking: string[] = [];
     try {
       const promptAuthOverride = id === 'authenticationFindings'
         ? await getGoogleAuthEvidence(ticket)
@@ -727,6 +1005,11 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
             // Accumulate tokens but don't surface them — the panel reveals the
             // finished answer whole rather than streaming it character by character.
             if (parsed.token) { answer += parsed.token; }
+            else if (parsed.thought) { /* streaming status is intentionally visual-only */ }
+            else if (Array.isArray(parsed.thinking)) {
+              thinking = parsed.thinking.filter(Boolean).map((item: unknown) => String(item));
+              setPanelThinking(current => ({ ...current, [id]: thinking }));
+            }
             else if (parsed.done) { answer = parsed.text || answer; }
             else if (parsed.error) {
               answer = parsed.error === 'Failed to reach Gemini API'
@@ -764,6 +1047,7 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
       }, 420);
     }
     setPregenDone(s => new Set(s).add(id)); // success — mark done
+    setPanelThinking(current => ({ ...current, [id]: thinking }));
     setState(s => ({ ...s, [id]: { ...s[id], suggestion: answer, content: s[id].status === 'edited' ? s[id].content : answer } }));
     return answer;
   };
@@ -797,7 +1081,7 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
     }
   };
 
-  // Shared Shorter / Expand / + Data chip row, rendered under any generated panel.
+  // Shared Shorter / Expand / + Data / Copy chip row, rendered under any generated panel.
   const RefineChips = ({ id, title }: { id: WorkspacePanelId; title: string }) => (
     <div className="flex flex-wrap items-center gap-1.5">
       {([
@@ -814,8 +1098,83 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
           {o.label}
         </button>
       ))}
+      <button
+        type="button"
+        onClick={() => copySuggestedPanel(id)}
+        title={copiedPanelId === id ? 'Copied' : `Copy ${title}`}
+        className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[10.5px] font-semibold bg-[#1A73E8]/10 text-[#1A73E8] hover:bg-[#1A73E8]/20 dark:text-[#8AB4F8] dark:bg-[#8AB4F8]/10 dark:hover:bg-[#8AB4F8]/20 transition-colors"
+      >
+        <span className="material-symbols-outlined text-[12px]">{copiedPanelId === id ? 'check' : 'content_copy'}</span>
+        {copiedPanelId === id ? 'Copied' : 'Copy'}
+      </button>
     </div>
   );
+
+  const informationRequests = useMemo(() => informationRequestsFor(ticket), [ticket?.case_number]);
+  const outstandingInformation = informationRequests.filter(request => !consultantEvidence.some(item => item.id === request.id));
+  const resolvedInformation = informationRequests.filter(request => consultantEvidence.some(item => item.id === request.id));
+  const panelTitle = (id: WorkspacePanelId) => WORKSPACE_PANELS.find(panel => panel.id === id)?.title ?? id;
+  const informationEvidenceFor = (id: string) => consultantEvidence.find(item => item.id === id);
+
+  const openInformation = (request: InformationRequest) => {
+    setExpandedInformationId(request.id);
+    setInformationChoice('');
+    setInformationDetail('');
+  };
+
+  const storeInformationEvidence = (request: InformationRequest, answer: string, skipped = false) => {
+    if (!answer) return;
+    const addedAt = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date());
+    setConsultantEvidence(current => [...current.filter(item => item.id !== request.id), {
+      id: request.id,
+      question: request.question,
+      answer,
+      priority: request.priority,
+      impacts: request.impacts,
+      addedAt,
+      skipped,
+    }]);
+    // Preserve manual edits and drafts. We flag only already-reviewed outputs as
+    // needing a refresh, leaving the consultant in control of every change.
+    setState(current => {
+      const next = { ...current };
+      request.impacts.forEach(id => {
+        if (next[id].status === 'accepted' || next[id].status === 'edited') {
+          next[id] = { ...next[id], status: 'stale' };
+        }
+      });
+      return next;
+    });
+    setExpandedInformationId(null);
+    setInformationChoice('');
+    setInformationDetail('');
+    setWorkspaceUpdate(skipped
+      ? `Marked as continued without additional context — Gemini will treat this as unknown, not as a confirmed fact.`
+      : `Analysis updated — review the affected ${request.impacts.map(panelTitle).join(', ')} section${request.impacts.length > 1 ? 's' : ''}.`);
+  };
+
+  const saveInformation = (request: InformationRequest) => {
+    const answer = [informationChoice, informationDetail.trim()].filter(Boolean).join(informationDetail.trim() ? ' — ' : '');
+    storeInformationEvidence(request, answer);
+  };
+
+  const continueWithoutInformation = (request: InformationRequest) => {
+    storeInformationEvidence(request, 'Not provided — consultant chose to continue without this additional customer-specific context. Treat this point as unknown.', true);
+  };
+
+  const refreshAffected = (request: InformationRequest) => {
+    request.impacts.forEach(id => {
+      const panel = WORKSPACE_PANELS.find(item => item.id === id);
+      if (panel && !panel.isFinal) generatePanel(id, panel.title);
+    });
+    setWorkspaceUpdate(`Refreshing the affected analysis using the confirmed context.`);
+  };
+
+  const priorityMeta: Record<InformationPriority, { label: string; cls: string }> = {
+    required: { label: 'Required before finalizing', cls: 'bg-[#FCE8E6] text-[#C5221F] border-[#F5C6C5]' },
+    recommended: { label: 'Recommended for a stronger response', cls: 'bg-[#FEF7E0] text-[#9A6700] border-[#FDE293]' },
+    optional: { label: 'Optional context', cls: 'bg-[#E8F0FE] text-[#1A73E8] border-[#D2E3FC]' },
+  };
 
   const currentId = currentPanelId(state);
   const currentIdRef = useRef<WorkspacePanelId | null>(currentId);
@@ -823,6 +1182,8 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
   // The flow "starts" once the intro panel is accepted; before that we show only the
   // centered Get Started splash.
   const started = state.gettingStarted.status === 'accepted' || state.gettingStarted.status === 'edited';
+  const showInformationGate = started && informationRequests.length > 0 && !informationGateComplete;
+  const needsInformation = showInformationGate;
 
   // Once the consultant hits Get started, pre-generate EVERY panel up front so each
   // step's AI suggestion is ready the moment they reach it — no waiting per step.
@@ -832,7 +1193,7 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
   // background. autoGenRef de-dupes so nothing regenerates (incl. restored content),
   // and we generate in flow order so the current panel is always done first.
   useEffect(() => {
-    if (!ticket || !started || pregenStartedRef.current) return;
+    if (!ticket || !started || needsInformation || pregenStartedRef.current) return;
     pregenStartedRef.current = true;
     (async () => {
       for (const p of WORKSPACE_PANELS) {
@@ -851,7 +1212,7 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
         await generatePanel(p.id, p.title, true); // sequential — one model call at a time
       }
     })();
-  }, [started, ticket?.case_number]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [started, needsInformation, ticket?.case_number]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fallback + retry: ensure the CURRENT panel always ends up generated. Covers
   // jumping ahead of the background queue AND retrying a panel whose generation
@@ -859,7 +1220,7 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
   // queue frees up (gen.id clears) or a panel finishes (pregenDone changes); bounded
   // by retryCountRef so a genuinely-down model doesn't loop forever.
   useEffect(() => {
-    if (!ticket || !currentId) return;
+    if (!ticket || !currentId || needsInformation) return;
     const def = WORKSPACE_PANELS.find(p => p.id === currentId);
     if (!def || def.isIntro) return;
     if (pregenDone.has(currentId)) return;          // already generated OK
@@ -872,9 +1233,9 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
     // completes, the save effect (which only fires on state changes) won't run, so
     // without this flush finalResponse would be missing from sessionStorage and would
     // regenerate on every return.
-    saveWorkspace(ticket.case_number, { state, autoGen: Array.from(autoGenRef.current) as WorkspacePanelId[], resolution });
+    saveWorkspace(ticket.case_number, { state, autoGen: Array.from(autoGenRef.current) as WorkspacePanelId[], resolution, consultantEvidence, informationGateComplete, informationGateVersion: INFORMATION_GATE_VERSION });
     generatePanel(currentId, def.title, true);
-  }, [currentId, gen.id, pregenDone]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentId, gen.id, pregenDone, needsInformation]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Smoothly scroll the newly-active panel into view as the consultant advances
   // (skips the very first render so opening the tab doesn't yank the page).
@@ -898,8 +1259,11 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
   // The pills shift while the active one expands; block clicks during that ~300ms window
   // so a quick second click can't land on a neighbour that just moved.
   const [navSettling, setNavSettling] = useState(false);
+  const [navPreviewId, setNavPreviewId] = useState<WorkspacePanelId | null>(null);
   const scrollSpyPausedUntilRef = useRef(0);
   const jumpToPanel = (id: WorkspacePanelId) => {
+    if (state[id].status === 'locked') return;
+    setNavPreviewId(null);
     jumpingRef.current = true;
     setNavSettling(true);
     if (jumpTimerRef.current) clearTimeout(jumpTimerRef.current);
@@ -955,6 +1319,15 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
     setCleanupGrounding(null);
   };
 
+  const copySuggestedPanel = (id: WorkspacePanelId) => {
+    const content = state[id]?.content?.trim();
+    if (!content) return;
+    navigator.clipboard?.writeText(content).then(() => {
+      setCopiedPanelId(id);
+      window.setTimeout(() => setCopiedPanelId(current => current === id ? null : current), 1500);
+    }).catch(() => {});
+  };
+
   // Truly REGENERATE a panel, feeding the consultant's edited draft back in as new
   // authoritative context — so the result is a fresh AI answer in the same rich
   // format as the original generation (NOT a reworded/templated swap of their text).
@@ -964,7 +1337,9 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
     if (!ticket) return '';
     genStartRef.current = Date.now();
     setGen({ id, phase: 'loading', streamText: '' });
+    setPanelThinking(current => ({ ...current, [id]: [] }));
     let answer = '';
+    let thinking: string[] = [];
     try {
       const isFinal = id === 'finalResponse';
       const prompt =
@@ -1001,6 +1376,11 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
           try {
             const parsed = JSON.parse(line.slice(5).trim());
             if (parsed.token) { answer += parsed.token; }
+            else if (parsed.thought) { /* streaming status is intentionally visual-only */ }
+            else if (Array.isArray(parsed.thinking)) {
+              thinking = parsed.thinking.filter(Boolean).map((item: unknown) => String(item));
+              setPanelThinking(current => ({ ...current, [id]: thinking }));
+            }
             else if (parsed.done) { answer = parsed.text || answer; }
             else if (parsed.error) {
               answer = parsed.error === 'Failed to reach Gemini API'
@@ -1014,6 +1394,7 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
       answer = `⚠️ Could not reach Gemini: ${e.message}`;
     }
     setGen({ id: null, phase: 'loading', streamText: '' });
+    setPanelThinking(current => ({ ...current, [id]: thinking }));
     return answer;
   };
   // Serialized through the same lock as generatePanel (one model call at a time).
@@ -1257,6 +1638,45 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
     // advances onto a panel before its turn: show the skeleton, never the raw seed.
     const busy = gen.id === id || (id !== 'gettingStarted' && !pregenDone.has(id));
     const proseCls = cn('ai-prose text-[13px] leading-relaxed text-on-surface-variant dark:text-inverse-on-surface/85', isDark && 'ai-prose-dark');
+    const thinkingNotes = panelThinking[id] ?? [];
+    const renderThinkingDisclosure = () => {
+      if (!thinkingNotes.length) return null;
+      return (
+        <>
+          <button
+            type="button"
+            onClick={event => {
+              event.stopPropagation();
+              setOpenThinkingPanel(current => current === id ? null : id);
+            }}
+            aria-label={openThinkingPanel === id ? 'Hide Gemini thinking notes' : 'Show Gemini thinking notes'}
+            aria-expanded={openThinkingPanel === id}
+            className="flex h-6 items-center gap-1.5 text-[11px] font-semibold transition-colors text-[#7A7F87] hover:text-[#0B57D0] dark:text-white/50 dark:hover:text-white/80"
+          >
+            <GeminiIcon className="h-4 w-4" />
+            <span>Thinking</span>
+            <span className={cn('material-symbols-outlined text-[15px] transition-transform', openThinkingPanel === id && 'rotate-180')}>expand_more</span>
+          </button>
+          <AnimatePresence initial={false}>
+            {openThinkingPanel === id && (
+              <motion.div
+                initial={{ opacity: 0, height: 0, y: -4 }}
+                animate={{ opacity: 1, height: 'auto', y: 0 }}
+                exit={{ opacity: 0, height: 0, y: -4 }}
+                transition={{ duration: 0.2, ease: [0.2, 0, 0, 1] }}
+                className="overflow-hidden border-b-2 border-[#1A73E8] pb-3 pt-1 text-[#7A7F87] dark:text-white/55"
+              >
+                <ul className="space-y-1 text-[11px] leading-relaxed">
+                  {thinkingNotes.map((note, noteIndex) => <li key={noteIndex}>{note}</li>)}
+                </ul>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </>
+      );
+    };
+
+    const thinkingDisclosure = renderThinkingDisclosure();
 
     if (id === 'gettingStarted') {
       const lines = [
@@ -1292,17 +1712,19 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
       return (
         <div className="flex flex-col gap-3">
           {busy ? (
-            <div className="flex gap-2 items-start">
-              <GeminiIcon className="w-3.5 h-3.5 shrink-0 mt-0.5 gemini-twinkle" />
+            <div className="flex flex-col gap-2">
               <div className="flex-1 flex flex-col gap-2 pt-1">
-                <div className="gemini-skel" style={{ width: '100%' }} />
-                <div className="gemini-skel" style={{ width: '92%', animationDelay: '0.18s' }} />
-                <div className="gemini-skel" style={{ width: '70%', animationDelay: '0.36s' }} />
+                <span className="flex h-10 items-center pl-[34px] text-[15px] font-semibold leading-normal text-[#4F565E] dark:text-white/75">
+                  <span className="thinking-shimmer">Thinking...</span>
+                </span>
                 <PhasedStatus startTime={genStartRef.current} phases={FINAL_PHASES} className="mt-0.5 text-[#1A73E8] dark:text-[#8AB4F8]" />
               </div>
             </div>
           ) : (
-            <MarkdownContent className={proseCls} content={st.content} />
+            <>
+              {thinkingDisclosure}
+              <MarkdownContent className={cn(thinkingNotes.length > 0 && 'mt-3', proseCls)} content={st.content} />
+            </>
           )}
 
           {/* Ticket-matched suggested guide articles, resolved to real synced guide paths */}
@@ -1401,19 +1823,19 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
       <div className="flex flex-col gap-3">
         {header}
         {busy ? (
-          <div className="flex gap-2 items-start">
-            <GeminiIcon className="w-3.5 h-3.5 shrink-0 mt-0.5 gemini-twinkle" />
+          <div className="flex flex-col gap-2">
             <div className="flex-1 flex flex-col gap-2 pt-1">
-              <div className="gemini-skel" style={{ width: '100%' }} />
-              <div className="gemini-skel" style={{ width: '88%', animationDelay: '0.18s' }} />
-              <div className="gemini-skel" style={{ width: '64%', animationDelay: '0.36s' }} />
+              <span className="flex h-10 items-center pl-[34px] text-[15px] font-semibold leading-normal text-[#4F565E] dark:text-white/75">
+                <span className="thinking-shimmer">Thinking...</span>
+              </span>
             </div>
           </div>
         ) : (
           <>
+            {thinkingDisclosure}
             {id === 'supportHistoryContext' && st.content
-              ? renderHistoryCards(st.content)
-              : <MarkdownContent className={proseCls} content={st.content} />
+              ? <div className={cn(thinkingNotes.length > 0 && 'mt-3')}>{renderHistoryCards(st.content)}</div>
+              : <MarkdownContent className={cn(thinkingNotes.length > 0 && 'mt-3', proseCls)} content={st.content} />
             }
             {/* Redacted cross-account precedent — the same "match reference" the
                 Overview shows, surfaced under the Recommended Actions next steps. */}
@@ -1459,6 +1881,115 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
           className="flex flex-col gap-4"
           data-gem-panel data-gem-panel-label="Workspace" data-gem-panel-content={`Workspace resolution flow for ${ticket?.case_number ?? ''} — ${ticket?.account_name ?? ''}`}
         >
+          {needsInformation ? (
+            <section className="mx-auto w-full max-w-[1180px] rounded-[26px] bg-[#F4F7FB] px-8 py-7 dark:bg-[#F4F7FB] text-[#02060A]">
+              <div className="flex items-end justify-between gap-6 pr-7">
+                <div className="flex items-end gap-4 min-w-0">
+                  <div className="shrink-0 select-none self-end pb-[6px] text-[58px] leading-none" aria-hidden="true">⚠️</div>
+                  <div className="min-w-0">
+                    <h2 className="text-[36px] leading-[1.04] font-[500] tracking-normal text-black">More information required</h2>
+                    <p className="mt-2 max-w-[650px] text-[14.5px] leading-tight font-semibold text-[#5F6368]">Gemini reviewed available ticket data before asking for these customer-specific details.</p>
+                  </div>
+                </div>
+                <div className="shrink-0 rounded-full bg-[#F9AB00] px-9 py-2.5 text-[21px] font-black text-white">
+                  {informationRequests.length} Review{informationRequests.length === 1 ? '' : 's'}
+                </div>
+              </div>
+
+              <div className="my-6 h-px bg-[#174EA6]" />
+
+              <div>
+                {informationRequests.map((request, index) => {
+                  const open = expandedInformationId === request.id;
+                  const evidence = informationEvidenceFor(request.id);
+                  const done = Boolean(evidence);
+                  const reviewTarget = reviewTargetFor(request, ticket);
+                  return (
+                    <article
+                      key={request.id}
+                      className={cn(
+                        'px-7 py-5 transition-colors',
+                        done ? 'bg-[#F1F8F3]' : 'bg-transparent',
+                        index > 0 && 'border-t border-dashed border-[#8AB4F8]',
+                      )}
+                    >
+                      <div className="grid grid-cols-1 items-center gap-4 md:grid-cols-[1fr_auto]">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-3">
+                            <h3 className="text-[22px] leading-tight font-[500] text-black">{request.title}</h3>
+                            {done && (
+                              <span className="inline-flex items-center gap-1.5 rounded-full bg-[#E6F4EA] px-2.5 py-0.5 text-[11px] font-black text-[#137333]">
+                                <span className="material-symbols-outlined text-[15px]" style={{ fontVariationSettings: "'FILL' 1" }}>check_circle</span>
+                                Done
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-2 text-[13.5px] leading-tight font-semibold text-[#5F6368]">{request.question}</p>
+                          <p className="mt-4 max-w-[840px] text-[14px] leading-[1.22] font-semibold text-[#5F6368]">{request.why}</p>
+                          <p className="mt-4 text-[13px] font-semibold text-[#888C91]"><span className="font-black text-[#7A7F85]">Impacts:</span> {request.impacts.map(panelTitle).join(' · ')}</p>
+                          {evidence && (
+                            <div className="mt-3 rounded-[14px] border border-[#C8E6C9] bg-white/75 px-4 py-2.5">
+                              <div className="text-[11px] font-black uppercase tracking-[0.12em] text-[#137333]">{evidence.skipped ? 'Continued without additional context' : 'Information added'}</div>
+                              <p className="mt-1 text-[14px] font-semibold leading-snug text-[#3C4043]">{evidence.answer}</p>
+                            </div>
+                          )}
+                        </div>
+                        <div className="justify-self-start md:justify-self-end flex flex-col items-start gap-2">
+                          <button
+                            onClick={() => open ? setExpandedInformationId(null) : openInformation(request)}
+                            className={cn('rounded-[18px] px-5 py-2.5 text-[14.5px] font-black', done ? 'bg-white text-[#1A73E8] ring-1 ring-[#D2E3FC] hover:bg-[#E8F0FE]' : 'bg-[#1A73E8] text-white hover:bg-[#1967D2]')}
+                          >
+                            {open ? 'Cancel' : done ? 'Edit' : 'Add information'}
+                          </button>
+                          {reviewTarget && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (onJumpPanel) onJumpPanel(reviewTarget.section, reviewTarget.panelLabel);
+                                else onJumpSection?.(reviewTarget.section);
+                              }}
+                              className="rounded-[18px] border border-[#D2E3FC] bg-white px-5 py-2.5 text-[14px] font-black text-[#1A73E8] hover:bg-[#E8F0FE]"
+                            >
+                              {reviewTarget.buttonLabel}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      {open && (
+                        <div className="mt-7 rounded-[18px] border border-[#D0D4DA] bg-white/65 p-4">
+                          <div className="flex flex-wrap gap-2">
+                            {request.choices.map(choice => (
+                              <button key={choice} onClick={() => setInformationChoice(choice)} className={cn('rounded-full border px-4 py-2 text-[13px] font-black transition-colors', informationChoice === choice ? 'border-[#1A73E8] bg-[#D2E3FC] text-[#174EA6]' : 'border-[#D0D4DA] bg-white text-[#5F6368] hover:border-[#1A73E8]/50')}>{choice}</button>
+                            ))}
+                          </div>
+                          <textarea value={informationDetail} onChange={event => setInformationDetail(event.target.value)} rows={2} placeholder="Add customer-specific context…" className="mt-4 w-full resize-y rounded-[14px] border border-[#D0D4DA] bg-white px-4 py-3 text-[14px] text-black outline-none focus:border-[#1A73E8]" />
+                          <div className="mt-4 flex flex-wrap items-center gap-2">
+                            <button onClick={() => saveInformation(request)} disabled={!informationChoice && !informationDetail.trim()} className="rounded-full bg-[#1A73E8] px-5 py-2.5 text-[13px] font-black text-white disabled:opacity-45">Save information</button>
+                            <button onClick={() => continueWithoutInformation(request)} className="rounded-full px-4 py-2.5 text-[13px] font-black text-[#5F6368] hover:bg-black/5">Continue without it</button>
+                          </div>
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+              {outstandingInformation.length === 0 && (
+                <div className="mt-6 flex items-center justify-between gap-4 rounded-[20px] border border-[#C8E6C9] bg-white/75 px-5 py-4">
+                  <div className="flex items-center gap-3 text-[#137333]">
+                    <span className="material-symbols-outlined text-[24px]" style={{ fontVariationSettings: "'FILL' 1" }}>check_circle</span>
+                    <div>
+                      <div className="text-[15px] font-black">All review context captured</div>
+                      <div className="text-[13px] font-semibold text-[#5F6368]">These answers will be fed into the next Gemini suggestions.</div>
+                    </div>
+                  </div>
+                  <button onClick={() => setInformationGateComplete(true)} className="rounded-full bg-[#1A73E8] px-6 py-3 text-[14px] font-black text-white hover:bg-[#1967D2]">
+                    Continue to Gemini suggestions
+                  </button>
+                </div>
+              )}
+            </section>
+          ) : (
+            <>
 
       {/* Horizontal step nav — same shared sliding pill treatment as Support History. */}
       <motion.div
@@ -1469,7 +2000,7 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
         style={{ top: WORKSPACE_NAV_TOP, marginBottom: WORKSPACE_NAV_TOP }}
       >
         <div className={cn(
-          'flex max-w-[calc(100vw-180px)] items-center gap-[3px] overflow-x-auto no-scrollbar p-[6px] rounded-[100px] bg-white/95 dark:bg-[#28272E]/95 backdrop-blur-[12px] border border-[rgba(218,220,224,0.8)] dark:border-white/[0.08] shadow-[0_4px_20px_rgba(32,33,36,0.08),0_1px_4px_rgba(32,33,36,0.04)] w-fit',
+          'flex max-w-[calc(100vw-180px)] items-center gap-[3px] overflow-visible p-[6px] rounded-[100px] bg-white/95 dark:bg-[#28272E]/95 backdrop-blur-[12px] border border-[rgba(218,220,224,0.8)] dark:border-white/[0.08] shadow-[0_4px_20px_rgba(32,33,36,0.08),0_1px_4px_rgba(32,33,36,0.04)] w-fit',
           navSettling ? 'pointer-events-none' : 'pointer-events-auto',
         )}>
           {flow.map(p => {
@@ -1478,24 +2009,31 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
             const locked = ns === 'locked';
             const stale = ns === 'stale';
             const navActive = activeNav === p.id;
+            const navPreview = navPreviewId === p.id && !navActive;
+            const navExpanded = navActive || navPreview;
             const fillIcon = navActive || done;
+            const expandedWidth = Math.max(32, Math.min(220, p.title.length * 8.5 + 48));
             return (
               <button
                 key={p.id}
-                disabled={locked}
-                title={p.title}
+                aria-disabled={locked}
                 onClick={() => jumpToPanel(p.id)}
+                onMouseEnter={() => setNavPreviewId(p.id)}
+                onMouseLeave={() => setNavPreviewId(current => current === p.id ? null : current)}
+                onFocus={() => setNavPreviewId(p.id)}
+                onBlur={() => setNavPreviewId(current => current === p.id ? null : current)}
+                style={{ width: navExpanded ? expandedWidth : 32 }}
                 className={cn(
-                  'relative flex h-8 items-center rounded-[100px] text-[13px] font-[500] transition-[background-color,color,box-shadow] duration-200 select-none whitespace-nowrap shrink-0',
-                  navActive
-                    ? 'gap-1.5 px-[12px] text-[#1a73e8] dark:text-[#8AB4F8]'
+                  'relative box-border flex h-8 items-center rounded-[100px] text-[13px] font-[500] transition-[width,background-color,color,box-shadow] duration-200 ease-out select-none whitespace-nowrap shrink-0 overflow-hidden',
+                  navExpanded
+                    ? 'justify-start gap-1.5 px-[12px] text-[#1a73e8] dark:text-[#8AB4F8]'
                     : locked
-                    ? 'w-8 justify-center text-[#9AA0A6]/55 cursor-default'
+                    ? 'justify-center text-[#9AA0A6]/55 cursor-default'
                     : done
-                    ? 'w-8 justify-center bg-[#137333] text-white shadow-[0_1px_4px_rgba(19,115,51,0.22)]'
+                    ? 'justify-center bg-[#137333] text-white shadow-[0_1px_4px_rgba(19,115,51,0.22)]'
                     : stale
-                    ? 'w-8 justify-center text-[#9A6700] dark:text-[#FBD38D] hover:bg-[#9A6700]/10'
-                    : 'w-8 justify-center text-[#5f6368] dark:text-white/60 hover:bg-[rgba(60,64,67,0.06)] hover:text-[#202124] dark:hover:text-white',
+                    ? 'justify-center text-[#9A6700] dark:text-[#FBD38D] hover:bg-[#9A6700]/10'
+                    : 'justify-center text-[#5f6368] dark:text-white/60 hover:bg-[rgba(60,64,67,0.06)] hover:text-[#202124] dark:hover:text-white',
                 )}
               >
                 {navActive && (
@@ -1505,8 +2043,15 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
                     transition={{ type: 'spring', stiffness: 500, damping: 38 }}
                   />
                 )}
+                {navPreview && (
+                  <span className="absolute inset-0 z-0 rounded-[100px] bg-[#e8f0fe] dark:bg-[#1a73e8]/20" />
+                )}
                 <span className="relative z-10 material-symbols-outlined shrink-0" style={{ fontSize: '17px', fontVariationSettings: fillIcon ? "'FILL' 1" : '' }}>{p.icon}</span>
-                {navActive && <span className="relative z-10">{p.title}</span>}
+                {navExpanded && (
+                  <span className="relative z-10 min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
+                    {p.title}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -1526,6 +2071,12 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
         const isLast = idx === flow.length - 1;
         const actionable = isCurrent || isStale;
         const editing = editingId === p.id;
+        const isFinalPanel = p.id === 'finalResponse';
+        const panelThinking = isCurrent && (gen.id === p.id || !pregenDone.has(p.id));
+        // The Google border is a generation-complete state, not an acceptance
+        // state. It appears the moment Final Ticket Response has usable output and remains
+        // visible after the consultant accepts or edits it.
+        const finalComplete = isFinalPanel && Boolean(st.content) && !panelThinking;
 
         return (
           <motion.div
@@ -1550,12 +2101,14 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
                 data-gem-panel-label={p.title}
                 data-gem-panel-content={st.content ? `${p.title}: ${st.content.slice(0, 800)}` : `${p.title} — not yet generated`}
                 className={cn(
-                'rounded-xl p-5 transition-all',
+                'rounded-xl p-5 transition-all relative',
                 p.isIntro && 'getstarted-panel relative',
-                isCurrent ? 'border-2 border-[#1A73E8] bg-white dark:bg-inverse-surface/40 shadow-[0_1px_3px_rgba(26,115,232,0.12)]' :
+                panelThinking && 'workspace-gemini-shell workspace-gemini-shell-thinking',
+                finalComplete && 'workspace-gemini-shell workspace-gemini-shell-complete',
+                isCurrent ? (isFinalPanel ? 'border-0 bg-white dark:bg-inverse-surface/40 shadow-[0_1px_3px_rgba(26,115,232,0.12)]' : 'border-2 border-[#1A73E8] bg-white dark:bg-inverse-surface/40 shadow-[0_1px_3px_rgba(26,115,232,0.12)]') :
                 isStale ? 'border-2 border-[#F59E0B]/60 bg-[#FEF7E0]/40 dark:bg-[#F59E0B]/5' :
                 isLocked ? 'border border-dashed border-outline-variant/80 dark:border-outline-variant/50 bg-surface-variant/20 dark:bg-inverse-surface/10' :
-                'border border-outline-variant/80 dark:border-outline-variant/50 bg-white dark:bg-inverse-surface/40',
+                (isFinalPanel ? 'border-0 bg-white dark:bg-inverse-surface/40' : 'border border-outline-variant/80 dark:border-outline-variant/50 bg-white dark:bg-inverse-surface/40'),
               )}>
                 {/* Header (hidden on the intro panel for a clean splash) */}
                 {!p.isIntro && (
@@ -1563,12 +2116,6 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
                   <div className="flex items-center gap-2 min-w-0">
                     <span className={cn('material-symbols-outlined text-[18px]', isLocked ? 'text-outline/50' : 'text-[#1A73E8] dark:text-[#8AB4F8]')}>{p.icon}</span>
                     <h4 className={cn('text-[15px] font-black truncate', isLocked ? 'text-outline/60' : 'text-on-surface dark:text-inverse-on-surface')}>{p.title}</h4>
-                    {!isLocked && !p.isIntro && (
-                      <span className="hidden sm:flex items-center gap-1 px-1.5 py-0.5 bg-[#1A73E8]/5 dark:bg-[#1A73E8]/15 border border-[#1A73E8]/20 rounded-full">
-                        <GeminiIcon className="w-[10px] h-[10px] text-[#1A73E8] dark:text-[#8AB4F8]" />
-                        <span className="text-[9px] font-black text-[#1A73E8] dark:text-[#8AB4F8] uppercase tracking-tight">AI suggested</span>
-                      </span>
-                    )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     {/* Edit / Refresh on completed panels */}
@@ -1586,7 +2133,7 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
                         </button>
                       </>
                     )}
-                    <StatusChip status={st.status} />
+                    {st.status !== 'current' && <StatusChip status={st.status} />}
                   </div>
                 </div>
                 )}
@@ -1601,16 +2148,9 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
                     const isReady = pregenDone.has(p.id);
                     if (isGenerating) {
                       return (
-                        <div className="flex flex-col gap-2">
-                          <div className="flex items-center gap-2 text-[12.5px] font-semibold text-[#1A73E8] dark:text-[#8AB4F8]">
-                            <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>
-                            Generating AI suggestion…
-                          </div>
-                          <div className="flex flex-col gap-1.5 opacity-60">
-                            <div className="gemini-skel" style={{ width: '92%' }} />
-                            <div className="gemini-skel" style={{ width: '74%', animationDelay: '0.18s' }} />
-                          </div>
-                        </div>
+                        <span className="flex h-10 items-center pl-[34px] text-[15px] font-semibold leading-normal text-[#4F565E] dark:text-white/75">
+                          <span className="thinking-shimmer">Thinking...</span>
+                        </span>
                       );
                     }
                     if (!isReady) {
@@ -1750,11 +2290,18 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
                   const busy = gen.id === p.id || !pregenDone.has(p.id);
                   return (
                   <div className="flex flex-wrap items-center gap-2 mt-4 pt-3 border-t border-outline-variant/15">
-                    <button onClick={() => doAccept(p.id)} disabled={busy} className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#1A73E8] text-white rounded-full text-[12px] font-bold hover:bg-[#1967D2] transition-colors disabled:opacity-50">
+                    <button onClick={() => doAccept(p.id)} disabled={busy} className="flex h-8 items-center gap-1.5 px-3.5 bg-[#1A73E8] text-white rounded-full text-[12px] font-bold hover:bg-[#1967D2] transition-colors disabled:opacity-50">
                       <span className="material-symbols-outlined text-[16px]">check</span> Accept
                     </button>
-                    <button onClick={() => startEdit(p.id)} disabled={busy} className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[12px] font-bold text-[#C5221F] dark:text-[#F28B82] border border-[#C5221F]/30 hover:bg-[#C5221F]/5 transition-colors disabled:opacity-50">
+                    <button onClick={() => startEdit(p.id)} disabled={busy} className="flex h-8 items-center gap-1.5 px-3.5 rounded-full text-[12px] font-bold text-[#C5221F] dark:text-[#F28B82] border border-[#C5221F]/30 hover:bg-[#C5221F]/5 transition-colors disabled:opacity-50">
                       <span className="material-symbols-outlined text-[16px]">edit_note</span> Reject &amp; edit
+                    </button>
+                    <button
+                      onClick={() => askGeminiAboutPanel(p.id, p.title)}
+                      className="relative flex h-8 items-center gap-1.5 px-3.5 rounded-full text-[12px] font-bold transition-all select-none whitespace-nowrap shrink-0 bg-[#E8F0FE] dark:bg-[#1A73E8]/20 text-[#1A73E8] dark:text-[#D2E3FC] hover:bg-[#D2E3FC] dark:hover:bg-[#1A73E8]/30 active:scale-[0.97]"
+                    >
+                      <GeminiIcon className="w-[15px] h-[15px]" />
+                      <span>Ask Gemini</span>
                     </button>
                     <button onClick={() => generatePanel(p.id, p.title)} disabled={busy} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-bold text-outline hover:bg-black/5 dark:hover:bg-white/5 transition-colors ml-auto disabled:opacity-50">
                       <span className={cn('material-symbols-outlined text-[15px]', busy && 'animate-spin')}>{busy ? 'progress_activity' : 'autorenew'}</span>
@@ -1821,6 +2368,8 @@ export default function WorkspacePanels({ ticket, onJumpSection }: { ticket: Cas
           (otherwise the page can't scroll far enough and the previous panel stays visible). */}
       <div aria-hidden className="shrink-0" style={{ height: '55vh' }} />
       </div>
+            </>
+          )}
         </motion.div>
       )}
     </AnimatePresence>

@@ -4,6 +4,7 @@ import { marked } from 'marked';
 import { cn } from '../App';
 import GeminiIcon from './GeminiIcon';
 import { AiPanelContext } from '../contexts/AiPanel';
+import { md3Ease, md3TextEnter } from '../lib/md3Motion';
 
 interface GuideFile {
   githubPath: string;
@@ -63,7 +64,16 @@ const getBreadcrumbs = (path: string) => {
   if (parts.length === 0) return ['User Guide'];
   
   const specialMappings: Record<string, string> = {
+    'api': 'API',
+    'apis': 'APIs',
     'faq': 'FAQ',
+    'id': 'ID',
+    'ids': 'IDs',
+    'ip': 'IP',
+    'ips': 'IPs',
+    'qa': 'QA',
+    'sdk': 'SDK',
+    'sdks': 'SDKs',
     'sso': 'SSO',
     'saml': 'SAML',
     'dns': 'DNS',
@@ -72,7 +82,8 @@ const getBreadcrumbs = (path: string) => {
     'dmarc': 'DMARC',
     'drag and drop editor': 'Drag-and-drop editor',
     'content cards': 'Content Cards',
-    'sms': 'SMS'
+    'sms': 'SMS',
+    'sql': 'SQL',
   };
 
   return ['User Guide', ...parts.map(part => {
@@ -81,14 +92,14 @@ const getBreadcrumbs = (path: string) => {
     if (specialMappings[lowerKey]) {
       return specialMappings[lowerKey];
     }
-    return label.replace(/\b\w/g, c => c.toUpperCase());
+    return label.replace(/\b[\w']+\b/g, word => specialMappings[word.toLowerCase()] ?? (word.charAt(0).toUpperCase() + word.slice(1)));
   })];
 };
 
 const getDocTitle = (file: GuideFile) => {
   const baseName = file.filename.replace(/\.md$/i, '');
   const pathParts = file.githubPath.split('/').filter(Boolean);
-  const toTitle = (s: string) => s.replace(/[-_]/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
+  const toTitle = (s: string) => getBreadcrumbs(`docs/User Guide/${s}.md`).at(-1) || s;
   return baseName.toLowerCase() === 'index' && pathParts.length >= 2
     ? toTitle(pathParts[pathParts.length - 2])
     : toTitle(baseName);
@@ -145,6 +156,9 @@ const parseMarkdownIntoSections = (markdownText: string) => {
   return sections;
 };
 
+const sectionId = (title: string, index: number) =>
+  `guide-section-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || index}-${index}`;
+
 interface UserGuideCenterProps {
   selectedFile: GuideFile | null;
   onSelectFile: (file: GuideFile | null) => void;
@@ -154,6 +168,7 @@ interface UserGuideCenterProps {
 
 export default function UserGuideCenter({ selectedFile, onSelectFile, files, onRefresh }: UserGuideCenterProps) {
   const contentContainerRef = useRef<HTMLDivElement>(null);
+  const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
 
   // Navigation history for back button (only populated by internal link clicks, not sidebar)
   const [navHistory, setNavHistory] = useState<GuideFile[]>([]);
@@ -366,6 +381,7 @@ export default function UserGuideCenter({ selectedFile, onSelectFile, files, onR
       view: 'user_guide', kind: 'guide',
       title,
       subtitle: 'User Guide Article',
+      guidePath: selectedFile.githubPath,
       raw: docContent ? docContent.slice(0, 3000) : undefined,
       suggestions: [
         'Summarize this article',
@@ -501,6 +517,27 @@ export default function UserGuideCenter({ selectedFile, onSelectFile, files, onR
 
   // Scroll detection for sticky compact header
   const [isScrolled, setIsScrolled] = useState(false);
+  const articleSections = parseMarkdownIntoSections(docContent);
+  const articleOutline = articleSections
+    .map((section, index) => ({ ...section, id: sectionId(section.title, index), index }))
+    .filter(section => section.title && section.level > 1);
+  const visibleOutline = articleOutline.length > 0
+    ? articleOutline
+    : articleSections
+      .map((section, index) => ({ ...section, id: sectionId(section.title, index), index }))
+      .filter(section => section.title);
+
+  const scrollToSection = (id: string) => {
+    const container = contentContainerRef.current;
+    const target = container?.querySelector<HTMLElement>(`#${CSS.escape(id)}`);
+    if (!container || !target) return;
+
+    // The guide viewer owns its scroll position, while its header is sticky.
+    // Scroll that container directly so the browser never jumps the page itself.
+    const headerHeight = container.querySelector<HTMLElement>('[data-guide-header]')?.offsetHeight ?? 0;
+    const targetTop = target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop;
+    container.scrollTo({ top: Math.max(0, targetTop - headerHeight - 16), behavior: 'smooth' });
+  };
 
   useEffect(() => {
     const container = contentContainerRef.current;
@@ -508,22 +545,36 @@ export default function UserGuideCenter({ selectedFile, onSelectFile, files, onR
 
     const handleScroll = () => {
       setIsScrolled(container.scrollTop > 30);
+      const sectionNodes = Array.from(container.querySelectorAll<HTMLElement>('[data-guide-section]'));
+      const headerHeight = container.querySelector<HTMLElement>('[data-guide-header]')?.offsetHeight ?? 0;
+      const next = sectionNodes.reduce<HTMLElement | null>((current, node) => (
+        node.getBoundingClientRect().top <= container.getBoundingClientRect().top + headerHeight + 24 ? node : current
+      ), sectionNodes[0] ?? null);
+      if (next?.id) setActiveSectionId(previous => previous === next.id ? previous : next.id);
     };
 
     setIsScrolled(false);
+    setActiveSectionId(visibleOutline[0]?.id ?? null);
     container.scrollTop = 0;
 
     container.addEventListener('scroll', handleScroll, { passive: true });
     return () => container.removeEventListener('scroll', handleScroll);
-  }, [selectedFile]);
+  }, [selectedFile, docContent]);
 
   return (
     <div className="flex-1 w-full h-full flex flex-col overflow-hidden relative fade-in bg-white dark:bg-[#151419]">
       {selectedFile ? (
-        <div ref={contentContainerRef} className="flex-1 overflow-y-auto custom-scrollbar select-text relative">
+        <motion.div
+          key={selectedFile.githubPath}
+          ref={contentContainerRef}
+          className="flex-1 overflow-y-auto custom-scrollbar select-text relative"
+          {...md3TextEnter}
+          transition={{ duration: 0.34, ease: md3Ease }}
+        >
           
           {/* Header / Breadcrumbs & Title Block — Sticky & Compact on Scroll */}
           <div 
+            data-guide-header
             className={cn(
               "sticky top-0 z-30 w-full transition-all duration-300 select-none",
               isScrolled 
@@ -621,7 +672,8 @@ export default function UserGuideCenter({ selectedFile, onSelectFile, files, onR
             </div>
           </div>
 
-          <div className="max-w-3xl mx-auto w-full px-6 pb-16 pt-4 flex flex-col gap-6">
+          <div className="mx-auto grid w-full max-w-[1180px] grid-cols-1 gap-8 px-6 pb-16 pt-4 lg:grid-cols-[minmax(0,1fr)_190px] lg:gap-10">
+            <div className="min-w-0">
               {isLoadingContent ? (
                 <div className="py-32 text-center flex flex-col items-center justify-center gap-3 select-none">
                   <span className="animate-spin material-symbols-outlined text-primary text-[32px]">progress_activity</span>
@@ -658,8 +710,15 @@ export default function UserGuideCenter({ selectedFile, onSelectFile, files, onR
                 </div>
               ) : (
                 <div className="flex flex-col gap-6">
-                  {parseMarkdownIntoSections(docContent).map((section, idx) => (
-                    <div key={idx} className="flex flex-col">
+                  {articleSections.map((section, idx) => (
+                    <motion.div
+                      key={idx}
+                      id={section.title ? sectionId(section.title, idx) : undefined}
+                      data-guide-section={section.title ? '' : undefined}
+                      className="flex flex-col"
+                      {...md3TextEnter}
+                      transition={{ duration: 0.34, ease: md3Ease, delay: Math.min(idx * 0.04, 0.2) }}
+                    >
                       {section.title && (
                         <div className="pt-6 pb-2.5 flex items-center gap-3 border-b border-outline-variant/15 mb-4 select-none">
                           <span className={cn(
@@ -680,12 +739,51 @@ export default function UserGuideCenter({ selectedFile, onSelectFile, files, onR
                           dangerouslySetInnerHTML={getCleanMarkdownHtml(section.content)}
                         />
                       </div>
-                    </div>
+                    </motion.div>
                   ))}
                 </div>
               )}
             </div>
-        </div>
+            {!isLoadingContent && !contentError && !isRawMarkdown && visibleOutline.length > 0 && (
+              <aside className="hidden self-start lg:block lg:sticky lg:top-1/2 lg:-translate-y-1/2 lg:translate-x-3">
+                <nav aria-label="Article sections" className="border-l border-[#D2E3FC] py-1 dark:border-[#8AB4F8]/30">
+                  <div className="px-3 pb-3">
+                    <p className="text-[15px] font-black leading-tight text-[#0B57D0] dark:text-[#D2E3FC]">{getDocTitle(selectedFile)}</p>
+                  </div>
+                  <div className="space-y-1 px-2">
+                    {visibleOutline.map(section => {
+                      const isActive = activeSectionId === section.id;
+                      return (
+                        <button
+                          key={section.id}
+                          type="button"
+                          onClick={() => scrollToSection(section.id)}
+                          aria-current={isActive ? 'location' : undefined}
+                          className={cn(
+                            'relative block w-full rounded-lg px-3 py-2 text-left text-[12px] leading-snug transition-colors',
+                            section.level >= 3 && 'pl-5 text-[11px]',
+                            isActive
+                              ? 'font-bold text-[#0B57D0] dark:text-[#D2E3FC]'
+                              : 'text-[#4E5969] hover:bg-[#F1F6FF] hover:text-[#0B57D0] dark:text-white/60 dark:hover:bg-white/5 dark:hover:text-[#D2E3FC]',
+                          )}
+                        >
+                          {isActive && (
+                            <motion.span
+                              layoutId="guide-outline-active"
+                              className="absolute inset-0 rounded-lg bg-[#E8F0FE] dark:bg-[#1A73E8]/20"
+                              transition={{ type: 'spring', stiffness: 500, damping: 38 }}
+                            />
+                          )}
+                          <span className="relative z-10">{section.title}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </nav>
+              </aside>
+            )}
+          </div>
+        </motion.div>
       ) : (
         <div className="py-32 text-center max-w-md mx-auto flex flex-col items-center justify-center gap-4 select-none">
           <div className="w-14 h-14 rounded-2xl bg-primary/10 text-primary flex items-center justify-center mb-1">

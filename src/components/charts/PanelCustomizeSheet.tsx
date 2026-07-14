@@ -8,6 +8,8 @@ export type PanelOutlineItem = {
   title: string;
   description?: string;
   visible: boolean;
+  disabled?: boolean;
+  disabledLabel?: string;
   preview?: ReactNode | (() => ReactNode);
 };
 
@@ -118,20 +120,31 @@ function PanelTogglePill({
   onToggle: () => void;
 }) {
   return (
-    <button
+    <motion.button
       type="button"
       onClick={event => {
         event.stopPropagation();
         onToggle();
       }}
-      className={cn(
-        'absolute right-0 top-0 z-10 flex h-9 w-9 translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-white shadow-[0_8px_22px_rgba(0,0,0,0.14)] transition-colors',
-        visible ? 'bg-[#C5221F] hover:bg-[#A50E0E]' : 'bg-[#1a73e8] hover:bg-[#1557B0]'
-      )}
+      initial={false}
+      animate={{
+        backgroundColor: visible ? '#C5221F' : '#1A73E8',
+        scale: 1,
+      }}
+      whileHover={{ scale: 1.06 }}
+      whileTap={{ scale: 0.92 }}
+      transition={{ type: 'spring', stiffness: 520, damping: 32, mass: 0.65 }}
+      className="absolute right-0 top-0 z-10 flex h-9 w-9 translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-white shadow-[0_2px_6px_rgba(30,55,90,0.22)] focus:outline-none focus-visible:ring-4 focus-visible:ring-[#D2E3FC]"
       aria-label={visible ? `Remove ${title}` : `Add ${title}`}
     >
-      <span className="material-symbols-outlined text-[20px] leading-none">{visible ? 'close' : 'add'}</span>
-    </button>
+      <motion.span
+        animate={{ rotate: visible ? 45 : 0, scale: visible ? 0.94 : 1 }}
+        transition={{ type: 'spring', stiffness: 520, damping: 30, mass: 0.55 }}
+        className="material-symbols-outlined text-[20px] leading-none"
+      >
+        add
+      </motion.span>
+    </motion.button>
   );
 }
 
@@ -153,7 +166,7 @@ export default function PanelCustomizeSheet({
   onHide: (key: string) => void;
 }) {
   const [sheetHeight, setSheetHeight] = useState(() => Math.min(760, Math.round(window.innerHeight * 0.9)));
-  const dragRef = useRef<{ startY: number; startHeight: number } | null>(null);
+  const dragRef = useRef<{ startY: number; startHeight: number; pointerId: number } | null>(null);
 
   useEffect(() => {
     const clampHeight = () => {
@@ -172,31 +185,33 @@ export default function PanelCustomizeSheet({
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
 
-  useEffect(() => {
-    document.body.style.overflow = open ? 'hidden' : '';
-    return () => {
-      document.body.style.overflow = '';
-    };
-  }, [open]);
-
   const startResize = (event: React.PointerEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    dragRef.current = { startY: event.clientY, startHeight: sheetHeight };
+    dragRef.current = { startY: event.clientY, startHeight: sheetHeight, pointerId: event.pointerId };
   };
 
   const updateResize = (event: React.PointerEvent<HTMLButtonElement>) => {
     if (!dragRef.current) return;
+    if (event.pointerId !== dragRef.current.pointerId) return;
+    if (event.buttons === 0) {
+      endResize(event);
+      return;
+    }
     const maxHeight = Math.round(window.innerHeight * 0.96);
     const next = dragRef.current.startHeight + dragRef.current.startY - event.clientY;
     setSheetHeight(Math.max(360, Math.min(maxHeight, next)));
   };
 
-  const endResize = () => {
+  const endResize = (event?: React.PointerEvent<HTMLButtonElement>) => {
+    if (event && event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
     dragRef.current = null;
   };
 
   const toggleItem = (item: PanelOutlineItem) => {
+    if (item.disabled) return;
     if (item.visible) onHide(item.key);
     else onShow(item.key);
   };
@@ -210,8 +225,8 @@ export default function PanelCustomizeSheet({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 z-[120] bg-black/20"
             onClick={onClose}
+            className="fixed inset-0 z-[120] bg-black/20"
           />
           <motion.aside
             data-panel-customize-sheet
@@ -234,6 +249,9 @@ export default function PanelCustomizeSheet({
               onPointerMove={updateResize}
               onPointerUp={endResize}
               onPointerCancel={endResize}
+              onLostPointerCapture={() => {
+                dragRef.current = null;
+              }}
               className="group flex h-8 shrink-0 cursor-ns-resize touch-none items-center justify-center"
             >
               <span className="h-1.5 w-14 rounded-full bg-[#1a73e8] transition-transform group-hover:scale-x-125" />
@@ -253,7 +271,7 @@ export default function PanelCustomizeSheet({
               </button>
             </div>
 
-            <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-8 pt-5 md:px-8 xl:px-10">
+            <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-8 pt-6 md:px-8 xl:px-10">
               {items.length === 0 ? (
                 <div className="flex h-full items-center justify-center text-center">
                   <p className="max-w-sm text-[15px] font-semibold text-on-surface-variant dark:text-inverse-on-surface/70">
@@ -267,10 +285,11 @@ export default function PanelCustomizeSheet({
                       key={item.key}
                       className={cn(
                         'group flex w-full flex-col items-start text-left transition-opacity',
-                        item.visible ? 'opacity-100' : 'opacity-70 hover:opacity-100'
+                        item.visible ? 'opacity-100' : 'opacity-70 hover:opacity-100',
+                        item.disabled && 'cursor-not-allowed opacity-50'
                       )}
                     >
-                      <div className="w-full rounded-[8px] bg-transparent transition-transform duration-200 group-hover:-translate-y-0.5">
+                      <div className="w-full rounded-[8px] bg-transparent">
                         <div
                           role="button"
                           tabIndex={0}
@@ -282,13 +301,13 @@ export default function PanelCustomizeSheet({
                             }
                           }}
                           className="relative block h-[170px] w-full overflow-visible text-left"
-                          aria-label={item.visible ? `Remove ${item.title}` : `Add ${item.title}`}
+                          aria-label={item.disabled ? `${item.title} is ${item.disabledLabel ?? 'unavailable'}` : item.visible ? `Remove ${item.title}` : `Add ${item.title}`}
                         >
-                          <PanelTogglePill
+                          {!item.disabled && <PanelTogglePill
                             visible={item.visible}
                             title={item.title}
                             onToggle={() => toggleItem(item)}
-                          />
+                          />}
                           <div className={cn(
                             'h-full w-full overflow-hidden rounded-[18px] border bg-[#F4F7FC] transition-colors md3-state-layer dark:bg-[#242228]',
                             item.visible ? 'border-[#1a73e8]/80' : 'border-outline-variant/30 hover:border-[#1a73e8]/55'
@@ -305,6 +324,7 @@ export default function PanelCustomizeSheet({
                           {item.description}
                         </p>
                       )}
+                      {item.disabled && <span className="mt-2 inline-flex rounded-full bg-on-surface/10 px-2 py-1 text-[10px] font-black uppercase tracking-wide text-on-surface-variant">{item.disabledLabel ?? 'Coming soon'}</span>}
                     </section>
                   ))}
                 </div>

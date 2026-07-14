@@ -206,7 +206,11 @@ export default function App() {
 
   const renderView = () => {
     switch (currentView) {
-      case 'glance': return <AtAGlance onNavigate={setCurrentView} setGlobalSearch={setGlobalSearch} />;
+      case 'glance': return <AtAGlance onNavigate={setCurrentView} setGlobalSearch={setGlobalSearch} onOpenTicket={(caseNumber) => {
+        setSelectedTicketId(caseNumber);
+        setActiveSection('Overview');
+        setCurrentView('investigation');
+      }} />;
       case 'charts': return <ChartsOverview />;
       case 'investigation': return (
         <Investigation

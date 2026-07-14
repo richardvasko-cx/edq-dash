@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { cn } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
 import IpWarmingPlanner from './IpWarmingPlanner';
+import { md3Ease, md3Enter, md3QuickEnter } from '../lib/md3Motion';
+import { dnsTypeName, resolveGoogleDns, type DnsLookupResult } from '../services/googleDigAuth';
 
 const DIG_PLACEHOLDERS = [
   'e.g., braze.com',
@@ -45,6 +47,20 @@ function viewportTop(scroller: HTMLElement | Window) {
 interface ToolsProps {
   activeTab: 'dig' | 'mx' | 'analyzer' | 'ip_warming';
   onTabChange: (tab: 'dig' | 'mx' | 'analyzer' | 'ip_warming') => void;
+}
+
+export interface ToolTicketContext {
+  account?: string;
+  caseNumber?: string;
+  sendingDomains?: string[];
+  sendingIps?: string[];
+  ipPools?: string[];
+  campaigns?: string[];
+  mailboxProviders?: string[];
+  subaccounts?: string[];
+  issue?: string;
+  rootCause?: string;
+  metrics?: Record<string, number>;
 }
 
 export default function Tools({ activeTab }: ToolsProps) {
@@ -142,12 +158,40 @@ export default function Tools({ activeTab }: ToolsProps) {
     return () => clearInterval(id);
   }, []);
   const [targetHost, setTargetHost] = useState('');
+  const [ticketContext, setTicketContext] = useState<ToolTicketContext | null>(null);
   
   // Dig State
-  const [digType, setDigType] = useState('ANY');
+  const [digType, setDigType] = useState('A');
   const [digResult, setDigResult] = useState<any[] | null>(null);
+  const [digLookup, setDigLookup] = useState<DnsLookupResult | null>(null);
   const [digLoading, setDigLoading] = useState(false);
   const [digError, setDigError] = useState('');
+
+  useEffect(() => {
+    const consumeGeminiAction = () => {
+      try {
+        const raw = sessionStorage.getItem('edq_gemini_app_action');
+        if (!raw) return;
+        const payload = JSON.parse(raw) as {
+          action?: { view?: string; toolsTab?: string; toolPrefill?: 'sending_domain' | 'sending_ip' };
+          ticket?: ToolTicketContext;
+        };
+        if (payload.action?.view !== 'tools') return;
+        const context = payload.ticket || {};
+        setTicketContext(context);
+        const preferIp = payload.action.toolPrefill === 'sending_ip';
+        const value = preferIp ? context.sendingIps?.[0] : context.sendingDomains?.[0];
+        if (value) {
+          setTargetHost(value);
+          setDigType(preferIp ? 'PTR' : 'TXT');
+        }
+        sessionStorage.removeItem('edq_gemini_app_action');
+      } catch {}
+    };
+    consumeGeminiAction();
+    window.addEventListener('edq:gemini-app-action', consumeGeminiAction);
+    return () => window.removeEventListener('edq:gemini-app-action', consumeGeminiAction);
+  }, [activeTab]);
 
   const formatTargetForDns = (host: string, isPtr: boolean) => {
     let hostname = host.trim();
@@ -167,7 +211,7 @@ export default function Tools({ activeTab }: ToolsProps) {
     setDigError('');
     setDigResult(null);
     
-    // Auto-detect IP and convert to PTR if ANY or PTR requested
+    // Auto-detect IP and convert to PTR for address-style lookups.
     let lookupTarget = targetHost.trim();
     // Strip http:// and https:// and paths if user pasted a URL
     try {
@@ -185,7 +229,7 @@ export default function Tools({ activeTab }: ToolsProps) {
     
     let actualType = type;
     if (isIP) {
-      if (type === 'ANY' || type === 'A' || type === 'AAAA') {
+      if (type === 'A' || type === 'AAAA') {
         actualType = 'PTR';
       }
       if (actualType === 'PTR') {
@@ -196,19 +240,16 @@ export default function Tools({ activeTab }: ToolsProps) {
     }
 
     try {
-      const res = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(lookupTarget)}&type=${actualType}`);
-      const data = await res.json();
-      
-      // If error status and no answer
-      if (data.Status !== 0 && !data.Answer && !data.Authority) {
-        setDigError(`DNS resolution failed with status ${data.Status}`);
-        return;
+      const lookup = await resolveGoogleDns(lookupTarget, actualType);
+      setDigLookup(lookup);
+      const combinedResults = [
+        ...(lookup.answers || []),
+        ...(lookup.authority || []),
+        ...(lookup.additional || []),
+      ];
+      if (lookup.status !== 0 && combinedResults.length === 0) {
+        setDigError(`DNS resolution returned ${lookup.statusText}`);
       }
-
-      let combinedResults = [];
-      if (data.Answer) combinedResults.push(...data.Answer);
-      if (data.Authority) combinedResults.push(...data.Authority);
-      if (data.Additional) combinedResults.push(...data.Additional);
       setDigResult(combinedResults);
     } catch (e: any) {
       setDigError(e.message || 'Network Error or Invalid Request');
@@ -217,12 +258,7 @@ export default function Tools({ activeTab }: ToolsProps) {
     }
   };
 
-  const getRecordTypeName = (type: number) => {
-    const types: Record<number, string> = {
-      1: 'A', 2: 'NS', 5: 'CNAME', 6: 'SOA', 12: 'PTR', 15: 'MX', 16: 'TXT', 28: 'AAAA', 33: 'SRV', 43: 'DS', 46: 'RRSIG', 47: 'NSEC', 48: 'DNSKEY', 50: 'NSEC3', 51: 'NSEC3PARAM', 52: 'TLSA', 64: 'SVCB', 65: 'HTTPS', 250: 'TSIG', 255: 'ANY', 257: 'CAA'
-    };
-    return types[type] || `TYPE${type}`;
-  };
+  const getRecordTypeName = dnsTypeName;
   // MX State
   const [mxResult, setMxResult] = useState<any[] | null>(null);
   const [mxLoading, setMxLoading] = useState(false);
@@ -242,10 +278,9 @@ export default function Tools({ activeTab }: ToolsProps) {
     } catch (e) { }
 
     try {
-      const res = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(lookupTarget)}&type=MX`);
-      const data = await res.json();
-      if (data.Answer) {
-        const parsed = data.Answer.map((ans: any) => {
+      const lookup = await resolveGoogleDns(lookupTarget, 'MX');
+      if (lookup.answers?.length) {
+        const parsed = lookup.answers.map((ans: any) => {
           const parts = ans.data.split(' ');
           const priority = parseInt(parts[0], 10);
           const host = parts[1];
@@ -303,7 +338,11 @@ export default function Tools({ activeTab }: ToolsProps) {
             {/* Google Dig Module */}
             {!isIpWarming && (
               <div ref={diagnosticsRef} className="flex flex-col gap-20">
-                <div className="sticky top-3 z-30 self-center -mb-10">
+                <motion.div
+                  className="sticky top-3 z-30 self-center -mb-10"
+                  {...md3QuickEnter}
+                  transition={{ duration: 0.34, ease: md3Ease }}
+                >
                   <nav className="flex items-center gap-[3px] p-[6px] rounded-[100px] bg-white/95 dark:bg-[#28272E]/95 backdrop-blur-[12px] border border-[rgba(218,220,224,0.8)] dark:border-white/[0.08] shadow-[0_4px_20px_rgba(32,33,36,0.08),0_1px_4px_rgba(32,33,36,0.04)] overflow-x-auto no-scrollbar max-w-[calc(100vw-2rem)]">
                     {diagnosticTabs.map(item => {
                       const isActive = activeToolAnchor === item.key;
@@ -345,11 +384,25 @@ export default function Tools({ activeTab }: ToolsProps) {
                       );
                     })}
                   </nav>
-                </div>
+                </motion.div>
 
-              <section ref={digRef} data-key="dig" id="tool-dig" data-gem-panel data-gem-panel-label="DNS Lookup Results" data-gem-panel-content={digResult ? `DNS Lookup Results for ${targetHost}:\n${digResult.map((r: any) => `${r.name} ${r.TTL} IN ${getRecordTypeName(r.type)} ${r.data}`).join('\n')}` : 'DNS Lookup Results — run a lookup to see data'} className="scroll-mt-[78px] bg-white dark:bg-inverse-surface rounded-xl shadow-none border border-[#1A73E8]/15 dark:border-outline-variant/10 p-6 md:p-8 duration-300">
-                <div className="flex flex-col gap-6 mb-8">
-                  <div className="flex flex-col md:flex-row gap-4 items-end">
+              <motion.section ref={digRef} data-key="dig" id="tool-dig" data-gem-panel data-gem-panel-label="DNS Lookup Results" data-gem-panel-content={digResult ? `DNS Lookup Results for ${targetHost}:\n${digResult.map((r: any) => `${r.name} ${r.TTL} IN ${getRecordTypeName(r.type)} ${r.data}`).join('\n')}` : 'DNS Lookup Results — run a lookup to see data'} className="scroll-mt-[78px] bg-white dark:bg-inverse-surface rounded-xl shadow-none border border-[#1A73E8]/15 dark:border-outline-variant/10 p-6 md:p-8 duration-300" {...md3Enter} transition={{ duration: 0.38, ease: md3Ease, delay: 0.04 }}>
+                <motion.div
+                  className="flex flex-col gap-6 mb-8"
+                  {...md3Enter}
+                  transition={{ duration: 0.32, ease: md3Ease, delay: 0.08 }}
+                >
+                  {ticketContext?.caseNumber && (
+                    <div className="rounded-xl border border-[#1A73E8]/20 bg-[#F8FAFF] px-4 py-3 text-[12px] leading-relaxed text-on-surface-variant dark:bg-white/5 dark:text-inverse-on-surface/70">
+                      <span className="font-bold text-on-surface dark:text-inverse-on-surface">Preloaded from {ticketContext.account} · {ticketContext.caseNumber}</span>
+                      <span className="ml-2">IP: {ticketContext.sendingIps?.join(', ') || 'Not recorded'} · Pool: {ticketContext.ipPools?.join(', ') || 'Not recorded'} · Campaign: {ticketContext.campaigns?.join(', ') || 'Not recorded'}</span>
+                    </div>
+                  )}
+                  <motion.div
+                    className="flex flex-col md:flex-row gap-4 items-end"
+                    {...md3Enter}
+                    transition={{ duration: 0.32, ease: md3Ease, delay: 0.12 }}
+                  >
                     <div className="flex-1 w-full">
                       <label className="block text-xs font-bold text-on-surface-variant dark:text-inverse-on-surface/80 mb-2">Domain Name or IP Address</label>
                       <div className="relative">
@@ -389,13 +442,16 @@ export default function Tools({ activeTab }: ToolsProps) {
                     >
                       {digLoading ? <span className="material-symbols-outlined animate-spin text-[18px]">sync</span> : 'Lookup'}
                     </motion.button>
-                  </div>
+                  </motion.div>
                   
                   {/* Dig Types List */}
-                  <div>
+                  <motion.div
+                    {...md3Enter}
+                    transition={{ duration: 0.32, ease: md3Ease, delay: 0.16 }}
+                  >
                     <label className="block text-xs font-bold text-on-surface-variant dark:text-inverse-on-surface/80 mb-3">Record Type</label>
                     <div className="flex flex-wrap gap-2 text-sm">
-                      {['A', 'AAAA', 'ANY', 'CAA', 'CNAME', 'DNSKEY', 'DS', 'HTTPS', 'MX', 'NS', 'PTR', 'SOA', 'SRV', 'SVCB', 'TLSA', 'TSIG', 'TXT'].map(t => (
+                      {['A', 'AAAA', 'CAA', 'CNAME', 'DNSKEY', 'DS', 'HTTPS', 'MX', 'NS', 'PTR', 'SOA', 'SRV', 'SVCB', 'TLSA', 'TSIG', 'TXT'].map(t => (
                         <button
                           key={t}
                           onClick={() => {
@@ -413,11 +469,15 @@ export default function Tools({ activeTab }: ToolsProps) {
                         </button>
                       ))}
                     </div>
-                  </div>
-                </div>
+                  </motion.div>
+                </motion.div>
 
                 {/* Terminal Output */}
-                <div className="bg-[#1E1E2E] text-[#D9DADC] p-4 rounded-lg font-mono text-sm overflow-x-auto min-h-[16rem] shadow-inner">
+                <motion.div
+                  className="bg-[#1E1E2E] text-[#D9DADC] p-4 rounded-lg font-mono text-sm overflow-x-auto min-h-[16rem] shadow-inner"
+                  {...md3Enter}
+                  transition={{ duration: 0.34, ease: md3Ease, delay: 0.2 }}
+                >
                   {digResult ? (
                     digResult.length > 0 ? (
                       <>
@@ -444,14 +504,18 @@ export default function Tools({ activeTab }: ToolsProps) {
                       <span>Ready for query</span>
                     </div>
                   )}
-                </div>
-              </section>
+                </motion.div>
+              </motion.section>
             
 
             {/* MX Tool Module */}
-              <section ref={mxRef} data-key="mx" id="tool-mx" data-gem-panel data-gem-panel-label="MX Record Analysis" data-gem-panel-content={mxResult ? `MX Record Analysis for ${targetHost}:\n${mxResult.map((mx: any) => `Priority ${mx.priority}: ${mx.host} — ${mx.status}`).join('\n')}` : 'MX Record Analysis — run a lookup to see data'} className="scroll-mt-[78px] bg-white dark:bg-inverse-surface rounded-xl shadow-none border border-[#1A73E8]/15 dark:border-outline-variant/10 p-6 md:p-8 duration-300">
+              <motion.section ref={mxRef} data-key="mx" id="tool-mx" data-gem-panel data-gem-panel-label="MX Record Analysis" data-gem-panel-content={mxResult ? `MX Record Analysis for ${targetHost}:\n${mxResult.map((mx: any) => `Priority ${mx.priority}: ${mx.host} — ${mx.status}`).join('\n')}` : 'MX Record Analysis — run a lookup to see data'} className="scroll-mt-[78px] bg-white dark:bg-inverse-surface rounded-xl shadow-none border border-[#1A73E8]/15 dark:border-outline-variant/10 p-6 md:p-8 duration-300" {...md3Enter} transition={{ duration: 0.38, ease: md3Ease, delay: 0.1 }}>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                  <div className="lg:col-span-1 space-y-4">
+                  <motion.div
+                    className="lg:col-span-1 space-y-4"
+                    {...md3Enter}
+                    transition={{ duration: 0.32, ease: md3Ease, delay: 0.14 }}
+                  >
                     <div>
                       <label className="block text-xs font-bold text-on-surface-variant dark:text-inverse-on-surface/80 mb-2">Target Domain</label>
                       <div className="flex gap-2">
@@ -486,9 +550,13 @@ export default function Tools({ activeTab }: ToolsProps) {
                         </div>
                       </div>
                     )}
-                  </div>
+                  </motion.div>
                   
-                  <div className="lg:col-span-2">
+                  <motion.div
+                    className="lg:col-span-2"
+                    {...md3Enter}
+                    transition={{ duration: 0.32, ease: md3Ease, delay: 0.18 }}
+                  >
                     <div className="overflow-x-auto">
                       <table className="w-full text-left border-collapse">
                         <thead>
@@ -516,14 +584,14 @@ export default function Tools({ activeTab }: ToolsProps) {
                         </tbody>
                       </table>
                     </div>
-                  </div>
+                  </motion.div>
                 </div>
-              </section>
+              </motion.section>
 
             
 
             {/* Analyzer Module */}
-              <section ref={analyzerRef} data-key="analyzer" id="tool-analyzer" data-gem-panel data-gem-panel-label="Header Analysis Results" data-gem-panel-content={headerAnalysis ? `Header Analysis:\n${JSON.stringify(headerAnalysis, null, 2).slice(0, 2000)}` : 'Header Analysis — paste and analyze a header to see data'} className="scroll-mt-[78px] bg-white dark:bg-[#1E1D22] rounded-2xl shadow-none border border-outline-variant/50 dark:border-white/8 overflow-hidden">
+              <motion.section ref={analyzerRef} data-key="analyzer" id="tool-analyzer" data-gem-panel data-gem-panel-label="Header Analysis Results" data-gem-panel-content={headerAnalysis ? `Header Analysis:\n${JSON.stringify(headerAnalysis, null, 2).slice(0, 2000)}` : 'Header Analysis — paste and analyze a header to see data'} className="scroll-mt-[78px] bg-white dark:bg-[#1E1D22] rounded-2xl shadow-none border border-outline-variant/50 dark:border-white/8 overflow-hidden" {...md3Enter} transition={{ duration: 0.38, ease: md3Ease, delay: 0.16 }}>
                 {/* Section header */}
                 <div className="flex items-center gap-2.5 px-5 py-3.5 border-b border-outline-variant/20 dark:border-white/8 bg-surface-container-low dark:bg-[#28272C]">
                   <span className="material-symbols-outlined text-primary dark:text-[#D2E3FC]" style={{ fontSize: '20px', fontVariationSettings: "'FILL' 1" }}>data_object</span>
@@ -531,7 +599,11 @@ export default function Tools({ activeTab }: ToolsProps) {
                 </div>
                 <div className="p-5 grid grid-cols-1 lg:grid-cols-2 gap-5">
                   {/* Input column */}
-                  <div className="flex flex-col gap-3">
+                  <motion.div
+                    className="flex flex-col gap-3"
+                    {...md3Enter}
+                    transition={{ duration: 0.32, ease: md3Ease, delay: 0.2 }}
+                  >
                     <label className="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant dark:text-white/50">Paste Raw Headers</label>
                     <textarea
                       className="w-full flex-1 min-h-[280px] bg-surface-container-low dark:bg-[#28272C] dark:text-inverse-on-surface border border-outline-variant/60 dark:border-white/12 rounded-xl p-4 font-mono text-sm focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 transition-all resize-none placeholder:text-on-surface-variant/40"
@@ -545,14 +617,22 @@ export default function Tools({ activeTab }: ToolsProps) {
                     >
                       Analyze Headers
                     </button>
-                  </div>
+                  </motion.div>
 
                   {/* Results column */}
                   {headerAnalysis ? (
-                    <div className="flex flex-col gap-3">
+                    <motion.div
+                      className="flex flex-col gap-3"
+                      {...md3Enter}
+                      transition={{ duration: 0.32, ease: md3Ease, delay: 0.24 }}
+                    >
                       <label className="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant dark:text-white/50">Analysis Results</label>
                       {/* Metadata rows */}
-                      <div className="bg-surface-container-low dark:bg-[#28272C] rounded-xl border border-[#1A73E8]/15 dark:border-white/8 divide-y divide-outline-variant/15 dark:divide-white/6">
+                      <motion.div
+                        className="bg-surface-container-low dark:bg-[#28272C] rounded-xl border border-[#1A73E8]/15 dark:border-white/8 divide-y divide-outline-variant/15 dark:divide-white/6"
+                        {...md3Enter}
+                        transition={{ duration: 0.3, ease: md3Ease, delay: 0.28 }}
+                      >
                         {[
                           { label: 'From', value: headerAnalysis.from, mono: true },
                           { label: 'Subject', value: headerAnalysis.subject, mono: false },
@@ -564,9 +644,13 @@ export default function Tools({ activeTab }: ToolsProps) {
                             <span className={cn("col-span-2 text-[13px] text-on-surface dark:text-inverse-on-surface break-all", row.mono ? "font-mono" : "font-medium")}>{row.value}</span>
                           </div>
                         ))}
-                      </div>
+                      </motion.div>
                       {/* Auth badges */}
-                      <div className="grid grid-cols-3 gap-3">
+                      <motion.div
+                        className="grid grid-cols-3 gap-3"
+                        {...md3Enter}
+                        transition={{ duration: 0.3, ease: md3Ease, delay: 0.32 }}
+                      >
                         {[
                           { label: 'SPF', value: headerAnalysis.spf },
                           { label: 'DKIM', value: headerAnalysis.dkim },
@@ -585,9 +669,13 @@ export default function Tools({ activeTab }: ToolsProps) {
                             </div>
                           );
                         })}
-                      </div>
+                      </motion.div>
                       {/* Routing hops */}
-                      <div className="bg-surface-container-low dark:bg-[#28272C] rounded-xl border border-[#1A73E8]/15 dark:border-white/8 px-4 py-3 flex items-center justify-between">
+                      <motion.div
+                        className="bg-surface-container-low dark:bg-[#28272C] rounded-xl border border-[#1A73E8]/15 dark:border-white/8 px-4 py-3 flex items-center justify-between"
+                        {...md3Enter}
+                        transition={{ duration: 0.3, ease: md3Ease, delay: 0.36 }}
+                      >
                         <div>
                           <p className="text-[13px] font-bold text-on-surface dark:text-inverse-on-surface">Routing Hops</p>
                           <p className="text-[11px] text-on-surface-variant mt-0.5">Mail servers traversed</p>
@@ -595,10 +683,14 @@ export default function Tools({ activeTab }: ToolsProps) {
                         <div className="w-10 h-10 rounded-full bg-primary text-white flex items-center justify-center font-bold text-lg shrink-0">
                           {headerAnalysis.hops}
                         </div>
-                      </div>
-                    </div>
+                      </motion.div>
+                    </motion.div>
                   ) : (
-                    <div className="bg-surface-container-low dark:bg-[#28272C] rounded-xl border border-[#1A73E8]/15 dark:border-white/8 flex flex-col justify-center items-center text-center p-8 gap-4">
+                    <motion.div
+                      className="bg-surface-container-low dark:bg-[#28272C] rounded-xl border border-[#1A73E8]/15 dark:border-white/8 flex flex-col justify-center items-center text-center p-8 gap-4"
+                      {...md3Enter}
+                      transition={{ duration: 0.32, ease: md3Ease, delay: 0.24 }}
+                    >
                       <div className="w-14 h-14 bg-surface-container-highest dark:bg-white/8 rounded-full flex items-center justify-center">
                         <span className="material-symbols-outlined text-[28px] text-on-surface-variant/50">analytics</span>
                       </div>
@@ -606,13 +698,13 @@ export default function Tools({ activeTab }: ToolsProps) {
                         <h3 className="text-[15px] font-bold text-on-surface dark:text-inverse-on-surface mb-1">Awaiting Headers</h3>
                         <p className="text-[13px] text-on-surface-variant dark:text-white/50 max-w-[240px]">Paste raw email headers and click Analyze to extract SPF, DKIM, DMARC, and routing data.</p>
                       </div>
-                    </div>
+                    </motion.div>
                   )}
                 </div>
-              </section>
+              </motion.section>
               </div>
             )}
-            {isIpWarming && <IpWarmingPlanner />}
+            {isIpWarming && <IpWarmingPlanner ticketContext={ticketContext} />}
           </motion.div>
         </AnimatePresence>
       </div>

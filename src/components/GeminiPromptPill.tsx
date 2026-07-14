@@ -5,13 +5,13 @@ import { cn } from '../App';
 import GeminiIcon from './GeminiIcon';
 import { ChatSparkIcon, DocSparkIcon } from './SparkIcons';
 import MarkdownContent from './MarkdownContent';
-import type { AppAction, ChatMessage, GuideArticle } from './AiPanel';
+import { SourcesPill, SuggestedArticlesPill, type AnswerEvidence, type AppAction, type ChatMessage, type GuideArticle } from './AiPanel';
 import type { ScreenContext } from '../contexts/AiPanel';
 import '@material/web/list/list.js';
 import '@material/web/list/list-item.js';
 import '@material/web/icon/icon.js';
 
-type Format = 'Standard' | 'Shorter' | 'Expand' | 'Data +';
+type Format = 'Standard' | 'Shorter' | 'Expand' | 'Formal' | 'Bulletize' | 'Data +';
 
 export interface ContextChip { label: string; content: string; scope?: string; }
 
@@ -33,9 +33,12 @@ interface ChatEntry {
   chips?: ContextChip[];
   articles?: GuideArticle[];
   actions?: AppAction[];
+  thinking?: string[];
+  evidence?: AnswerEvidence[];
   // Continuity suggestions: secondary pinned panels the model set aside, surfaced
   // as clickable pills so the agent can dig into each without retyping.
   followups?: ContextChip[];
+  suggestedModel?: { id: string; label: string };
 }
 
 interface ConvSummary { id: string; title: string; timestamp: string; preview: string; source: string; }
@@ -85,44 +88,88 @@ interface GeminiPromptPillProps {
   highlightedContext?: { text: string; domContext: string } | null;
 }
 
-const FORMAT_OPTIONS: Format[] = ['Standard', 'Shorter', 'Expand', 'Data +'];
+const FORMAT_OPTIONS: Format[] = ['Standard', 'Shorter', 'Expand', 'Formal', 'Bulletize', 'Data +'];
 
 const FORMAT_INSTRUCTIONS: Record<Format, string> = {
   'Standard': '',
   'Shorter': 'Be concise — answer in 2-3 sentences maximum. ',
   'Expand': 'Expand the context and provide technical detail — include exact values, commands, and supporting specifics. ',
+  'Formal': 'Adopt a formal tone. Make it highly technical, concise, and to the point. ',
+  'Bulletize': 'Summarize the answer in a concise, highly technical bullet point format. ',
   'Data +': 'Lead with key metrics and data points before explaining. Include specific numbers where available. ',
 };
+const FORMAT_ICONS: Record<Format, string> = {
+  'Standard': 'notes',
+  'Shorter': 'compress',
+  'Expand': 'expand_content',
+  'Formal': 'work',
+  'Bulletize': 'format_list_bulleted',
+  'Data +': 'bar_chart',
+};
+
+const REFINE_DISPLAY_LABEL: Record<'shorter' | 'technical' | 'data' | 'formal' | 'bulletize' | 'standard', string> = {
+  shorter: 'Shorter',
+  technical: 'Expand',
+  data: '+ Data',
+  formal: 'Formal',
+  bulletize: 'Bulletize',
+  standard: 'Standard',
+};
+
+function workspacePanelLabel(label?: string): string {
+  return (label || '').split(' · ')[0].trim();
+}
+
+function displayTextIcon(label?: string): string {
+  switch (workspacePanelLabel(label)) {
+    case 'Customer Issue': return 'contact_support';
+    case 'Root Cause': return 'search';
+    case 'Authentication': return 'shield';
+    case 'Deliverability': return 'mark_email_unread';
+    case 'Email Performance': return 'equalizer';
+    case 'Support History': return 'history';
+    case 'Recommended Actions': return 'checklist';
+    case 'Next Steps': return 'checklist';
+    case 'Final Ticket Response': return 'drafts';
+    case 'Shorter': return 'compress';
+    case 'Expand': return 'expand_content';
+    case '+ Data': return 'bar_chart';
+    case 'Formal': return 'work';
+    case 'Bulletize': return 'format_list_bulleted';
+    case 'Standard': return 'notes';
+    default: return 'auto_stories';
+  }
+}
+
+const WORKSPACE_PROMPT_DISPLAY_LABELS = new Set([
+  'Customer Issue',
+  'Root Cause',
+  'Authentication',
+  'Deliverability',
+  'Email Performance',
+  'Support History',
+  'Next Steps',
+  'Final Ticket Response',
+]);
+
+function isWorkspacePromptEntry(entry?: ChatEntry): boolean {
+  return Boolean(entry?.displayText && WORKSPACE_PROMPT_DISPLAY_LABELS.has(workspacePanelLabel(entry.displayText)));
+}
+
+function isWorkspaceDisplayTitle(title?: string): boolean {
+  return Boolean(title && WORKSPACE_PROMPT_DISPLAY_LABELS.has(workspacePanelLabel(title)));
+}
+
+function conversationTitleFor(entries: ChatEntry[]): string | undefined {
+  const firstWorkspacePrompt = entries.find(entry => entry.type === 'user' && isWorkspacePromptEntry(entry));
+  return firstWorkspacePrompt?.displayText;
+}
 
 const SUGGESTED_PROMPTS = [
   'When should I move a domain from p=quarantine to p=reject?',
   'What SPF record patterns trigger PermError at Gmail?',
   "How do I read Microsoft's SNDS data for an IP?",
 ];
-
-const THINKING_WORDS = ['Let me check 👀', 'Cooking', 'Drafting ✏️', 'Final touches'];
-const THINKING_STEP_MS = 3000;
-
-function ThinkingStatus({ className, startTime }: { className?: string; startTime: number }) {
-  const getIdx = () => Math.min(Math.floor((Date.now() - startTime) / THINKING_STEP_MS), THINKING_WORDS.length - 1);
-  const [i, setI] = useState(getIdx);
-  useEffect(() => {
-    const elapsed = Date.now() - startTime;
-    const cur = Math.min(Math.floor(elapsed / THINKING_STEP_MS), THINKING_WORDS.length - 1);
-    setI(cur);
-    const timers = THINKING_WORDS.slice(cur + 1).map((_, rel) => {
-      const targetIdx = cur + 1 + rel;
-      const delay = THINKING_STEP_MS * targetIdx - elapsed;
-      return setTimeout(() => setI(targetIdx), delay);
-    });
-    return () => timers.forEach(clearTimeout);
-  }, [startTime]);
-  return (
-    <div className={cn('h-4 overflow-hidden', className)}>
-      <span key={i} className="gemini-think-word block text-[11px] font-medium">{THINKING_WORDS[i]}</span>
-    </div>
-  );
-}
 
 marked.setOptions({ gfm: true, breaks: true });
 function mdToHtml(md: string) { return { __html: marked.parse(md) as string }; }
@@ -136,6 +183,7 @@ function serializeScreenContext(ctx: ScreenContext | null): string {
   lines.push(`Currently viewing: ${viewLabel}`);
   lines.push(`Title: ${ctx.title}`);
   if (ctx.subtitle) lines.push(`Reference: ${ctx.subtitle}`);
+  if (ctx.guidePath) lines.push(`Active guide path: ${ctx.guidePath}`);
   if (ctx.issue) lines.push(`Issue: ${ctx.issue}`);
   if (ctx.rca) lines.push(`Root cause summary: ${ctx.rca}`);
   if (ctx.data?.length) {
@@ -202,10 +250,14 @@ export default function GeminiPromptPill({
   const [chips, setChips] = useState<ContextChip[]>([]);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [selectedFormat, setSelectedFormat] = useState<Format>('Standard');
+  const [moreFormatsOpen, setMoreFormatsOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatEntry[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [streamingText, setStreamingText] = useState('');
+  const [openThinkingMessage, setOpenThinkingMessage] = useState<number | null>(null);
+  const [inlineSuggestion, setInlineSuggestion] = useState('');
+  const [activeSearchCategory, setActiveSearchCategory] = useState<GeminiSearchItem['type'] | null>(null);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [editingText, setEditingText] = useState('');
@@ -220,12 +272,14 @@ export default function GeminiPromptPill({
   const [pillStarters, setPillStarters] = useState<string[]>([]);
   const [pillStartersLoading, setPillStartersLoading] = useState(false);
   const [pillStartersDismissed, setPillStartersDismissed] = useState(false);
-  // expandKey > 0 guards: prevents glow from playing on first mount
-  const [expandKey, setExpandKey] = useState(0);
+  const [modelToast, setModelToast] = useState<string | null>(null);
+  const [pillOpenGlowKey, setPillOpenGlowKey] = useState(0);
   // Pre-chat history panel (shown above pill before any chat is open)
   const [preHistoryOpen, setPreHistoryOpen] = useState(false);
 
-  const inputRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const autocompleteAbortRef = useRef<AbortController | null>(null);
+  const lastAcceptedAutocompleteRef = useRef('');
   const pillWrapperRef = useRef<HTMLDivElement>(null);
   const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const historyCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -233,14 +287,81 @@ export default function GeminiPromptPill({
 
   const clearPillInput = () => {
     setInputText('');
+    setInlineSuggestion('');
+    lastAcceptedAutocompleteRef.current = '';
     onSearchQueryChange?.('');
-    if (inputRef.current) inputRef.current.innerText = '';
+    if (inputRef.current) inputRef.current.value = '';
   };
 
   const updatePillInput = (value: string) => {
+    if (value.trimEnd().toLowerCase() !== lastAcceptedAutocompleteRef.current) {
+      lastAcceptedAutocompleteRef.current = '';
+    }
     setInputText(value);
+    setInlineSuggestion('');
     onSearchQueryChange?.(value);
   };
+
+  const acceptInlineSuggestion = () => {
+    const cursor = inputRef.current?.selectionStart ?? inputText.length;
+    const before = inputText.slice(0, cursor);
+    const after = inputText.slice(cursor);
+    const currentWord = before.match(/(\S+)$/)?.[1] ?? '';
+    const wouldCompleteKnownToken = currentWord.length > 0 && searchResults.some(item => {
+      const haystack = `${item.title} ${item.subtitle ?? ''} ${item.meta ?? ''}`.toLowerCase();
+      return haystack.split(/[\s>·:;,/()[\]{}'"-]+/).some(token =>
+        token.startsWith(`${currentWord}${inlineSuggestion}`.toLowerCase()),
+      );
+    });
+    const spacer = before.length > 0
+      && /\S$/.test(before)
+      && /^\S/.test(inlineSuggestion)
+      && !wouldCompleteKnownToken
+      ? ' '
+      : '';
+    const nextValue = `${before}${spacer}${inlineSuggestion}${after}`;
+    lastAcceptedAutocompleteRef.current = nextValue.trimEnd().toLowerCase();
+    updatePillInput(nextValue);
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      const nextCursor = before.length + spacer.length + inlineSuggestion.length;
+      inputRef.current?.setSelectionRange(nextCursor, nextCursor);
+    });
+  };
+
+  useEffect(() => {
+    autocompleteAbortRef.current?.abort();
+    const text = inputText.trimEnd();
+    // Only complete a search/topic fragment. Questions are intentionally left to
+    // Gemini on Enter so a predictive answer can never be injected into the field.
+    if (!geminiEnabled || isLoading || !isExpanded || text.length < 4 || /[?.!]$/.test(text)
+      || /^(how|why|what|when|where|who|which|can|could|should|would|do|does|did|is|are|will)\b/i.test(text)
+      || text.toLowerCase() === lastAcceptedAutocompleteRef.current) return;
+    const timer = window.setTimeout(async () => {
+      const controller = new AbortController();
+      autocompleteAbortRef.current = controller;
+      try {
+        const response = await fetch('/api/gemini/autocomplete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, screen: serializeScreenContext(screenContext) }),
+          signal: controller.signal,
+        });
+        const data = await response.json();
+        if (!controller.signal.aborted && inputRef.current?.value.trimEnd() === text) {
+          const suggestion = String(data.suggestion || '');
+          const normalizedSuggestion = suggestion.trim().toLowerCase();
+          const normalizedText = text.toLowerCase();
+          if (!normalizedSuggestion || normalizedText.endsWith(normalizedSuggestion) || normalizedText === lastAcceptedAutocompleteRef.current) {
+            setInlineSuggestion('');
+          } else {
+            setInlineSuggestion(suggestion);
+          }
+        }
+      } catch {}
+    }, 260);
+    return () => { window.clearTimeout(timer); autocompleteAbortRef.current?.abort(); };
+  }, [geminiEnabled, inputText, isExpanded, isLoading, screenContext]);
 
   useEffect(() => {
     const focusPill = () => {
@@ -251,6 +372,22 @@ export default function GeminiPromptPill({
     };
     window.addEventListener('edq:focus-gemini-pill', focusPill);
     return () => window.removeEventListener('edq:focus-gemini-pill', focusPill);
+  }, []);
+
+  useEffect(() => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const showModelToast = (event: Event) => {
+      const label = (event as CustomEvent<{ label?: string }>).detail?.label || 'Gemini model';
+      const displayLabel = label.replace(/^Gemini\s+/i, '');
+      setModelToast(`Updated to ${displayLabel}`);
+      if (timeout) clearTimeout(timeout);
+      timeout = setTimeout(() => setModelToast(null), 1800);
+    };
+    window.addEventListener('edq-gemini-model-change', showModelToast);
+    return () => {
+      window.removeEventListener('edq-gemini-model-change', showModelToast);
+      if (timeout) clearTimeout(timeout);
+    };
   }, []);
 
   // When the panel closes, immediately seed pill with whatever history exists
@@ -264,6 +401,7 @@ export default function GeminiPromptPill({
         displayText: m.displayContent,
         articles: m.articles,
         actions: m.actions,
+        thinking: m.thinking,
         chips: m.chips?.map(c => ({ label: c.label, content: '' })),
       }));
       setChatHistory(entries);
@@ -285,6 +423,7 @@ export default function GeminiPromptPill({
         displayText: m.displayContent,
         articles: m.articles,
         actions: m.actions,
+        thinking: m.thinking,
         chips: m.chips?.map(c => ({ label: c.label, content: '' })),
       }));
       setChatHistory(entries);
@@ -305,7 +444,7 @@ export default function GeminiPromptPill({
   const snap = useRef({
     isPillHovered: false, isDropdownHovered: false,
     isFocused: false, inputText: '', chips: [] as ContextChip[],
-    selectorActive: false, isDropdownOpen: false, chatOpen: false, isLoading: false, chatMinimized: false, preHistoryOpen: false, historyView: false,
+    selectorActive: false, isDropdownOpen: false, chatOpen: false, isLoading: false, chatMinimized: false, preHistoryOpen: false, historyView: false, isExpanded: false,
   });
   useEffect(() => {
     snap.current.isFocused = isFocused;
@@ -318,6 +457,7 @@ export default function GeminiPromptPill({
     snap.current.chatMinimized = chatMinimized;
     snap.current.preHistoryOpen = preHistoryOpen;
     snap.current.historyView = historyView;
+    snap.current.isExpanded = isExpanded;
   });
 
   // Expand pill immediately when context selector activates
@@ -325,12 +465,13 @@ export default function GeminiPromptPill({
     if (selectorActive) setIsExpanded(true);
   }, [selectorActive]);
 
-  // Re-open chat panel when pill re-expands and there's an active conversation
+  // Re-open chat only when there is a completed reply. A queued first prompt
+  // remains in the pill until its answer is ready.
   useEffect(() => {
-    if (isExpanded && chatHistory.length > 0 && !chatOpen) {
+    if (isExpanded && chatHistory.some(item => item.type === 'assistant') && !chatOpen) {
       setChatOpen(true);
     }
-  }, [isExpanded]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isExpanded, chatHistory, chatOpen]);
 
   // Fetch contextual starter suggestions whenever the screen context changes
   useEffect(() => {
@@ -366,13 +507,6 @@ export default function GeminiPromptPill({
     if (chips.length > 0) setPillStartersDismissed(true);
   }, [chips.length]);
 
-  // One-shot glow only on transitions false→true, never on initial mount
-  const firstRender = useRef(true);
-  useEffect(() => {
-    if (firstRender.current) { firstRender.current = false; return; }
-    if (isExpanded) setExpandKey(k => k + 1);
-  }, [isExpanded]);
-
   useEffect(() => {
     if (!prevAiOpen.current && isAiPanelOpen) {
       setIsExpanded(false);
@@ -383,14 +517,19 @@ export default function GeminiPromptPill({
   }, [isAiPanelOpen]);
 
   useEffect(() => {
+    if (isExpanded) setPillOpenGlowKey(key => key + 1);
+  }, [isExpanded]);
+
+  useEffect(() => {
     if (!pendingChip) return;
     setChips(prev => {
-      if (prev.find(c => c.label === pendingChip.label)) return prev;
+      if (prev.find(c => c.label === pendingChip.label)) {
+        return prev.map(c => c.label === pendingChip.label ? pendingChip : c);
+      }
       return [...prev, pendingChip];
     });
     setIsExpanded(true);
     onChipConsumed();
-    setTimeout(() => inputRef.current?.focus(), 60);
   }, [pendingChip]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Track scroll position for scroll-down arrow
@@ -411,20 +550,24 @@ export default function GeminiPromptPill({
   useEffect(() => {
     const handleMouseDown = (e: MouseEvent) => {
       const s = snap.current;
-      // Never interfere with clicks inside the pill wrapper.
-      if (pillWrapperRef.current?.contains(e.target as Node)) return;
+      // Suggestions are visually attached to the pill but live outside its
+      // wrapper so they can animate independently. Treat them as inside.
+      if (pillWrapperRef.current?.contains(e.target as Node) || (e.target as Element).closest?.('[data-gemini-suggestion-lane]')) return;
       // Never close pill when history panels are open — let explicit close buttons handle it.
       if (s.historyView || s.preHistoryOpen) return;
+      if (s.selectorActive) return;
       if (s.isLoading) {
         // Keep generating, just minimize.
         setChatMinimized(true);
         setIsExpanded(false);
         setIsDropdownOpen(false);
-      } else if (s.chatOpen || s.isDropdownOpen) {
+      } else if (s.chatOpen || s.isDropdownOpen || s.isExpanded) {
         setChatMinimized(false);
         setChatOpen(false);
         setIsExpanded(false);
         setIsDropdownOpen(false);
+        setPreHistoryOpen(false);
+        setHistoryOpen(false);
       }
     };
     document.addEventListener('mousedown', handleMouseDown, true);
@@ -452,6 +595,10 @@ export default function GeminiPromptPill({
     if (collapseTimerRef.current) clearTimeout(collapseTimerRef.current);
     collapseTimerRef.current = setTimeout(() => {
       const s = snap.current;
+      // Streaming owns the expanded pill until the user deliberately clicks
+      // outside it. In particular, unmounting suggested prompts must not make
+      // their mouse-leave event collapse an in-flight request.
+      if (s.isLoading) return;
       const hasContent = s.inputText.trim().length > 0 || s.chips.length > 0;
       // Never collapse when chat is open — pill stays expanded while conversation is active
       if (!s.isPillHovered && !s.isDropdownHovered && !s.isFocused && !hasContent && !s.selectorActive && !s.isDropdownOpen && !s.chatOpen && !s.preHistoryOpen && !s.historyView) {
@@ -496,6 +643,22 @@ export default function GeminiPromptPill({
   };
 
   const hasContent = inputText.trim().length > 0 || chips.length > 0;
+  const chipLabelLength = chips.reduce((total, chip) => total + chip.label.length, 0);
+  const composerLoad = inputText.length + Math.min(inlineSuggestion.length, 36) + chipLabelLength + Math.max(0, chips.length - 1) * 8;
+  const composerWidth = isExpanded
+    ? composerLoad > 82
+      ? 920
+      : composerLoad > 50
+      ? 800
+      : 680
+    : 680;
+
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = '24px';
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 24), 92)}px`;
+  }, [inputText, inlineSuggestion, chips.length, isExpanded, composerWidth]);
 
   const handleChatHeightPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     e.preventDefault();
@@ -548,6 +711,21 @@ export default function GeminiPromptPill({
     }).catch(() => {});
   };
 
+  const switchSuggestedModel = async (model: { id: string; label: string }, failedAnswerIndex: number) => {
+    const response = await fetch('/api/gemini/model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: model.id }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Unable to update Gemini model');
+    window.dispatchEvent(new CustomEvent('edq-gemini-model-change', { detail: { active: data.active, label: model.label } }));
+    const historyUntilFailure = chatHistory.slice(0, failedAnswerIndex);
+    const retryIndex = [...historyUntilFailure].map((entry, index) => ({ entry, index })).reverse().find(({ entry }) => entry.type === 'user')?.index;
+    if (retryIndex === undefined) return;
+    const retry = historyUntilFailure[retryIndex];
+    setChatHistory(historyUntilFailure.slice(0, retryIndex));
+    sendMessage(retry.text, undefined, historyUntilFailure.slice(0, retryIndex), retry.edited, retry.displayText);
+  };
+
   // Edit a user prompt inline within its bubble. Clicking edit turns the bubble
   // into an editable field; approving re-runs the chat from that point and
   // discards everything generated after it.
@@ -556,7 +734,7 @@ export default function GeminiPromptPill({
     const entry = chatHistory[idx];
     if (!entry || entry.type !== 'user') return;
     setEditingIdx(idx);
-    setEditingText(entry.text);
+    setEditingText(isWorkspacePromptEntry(entry) ? '' : entry.text);
   };
 
   const cancelEdit = () => { setEditingIdx(null); setEditingText(''); };
@@ -570,6 +748,10 @@ export default function GeminiPromptPill({
     const base = chatHistory.slice(0, idx);
     setEditingIdx(null);
     setEditingText('');
+    if (isWorkspacePromptEntry(original)) {
+      sendMessage(`${original.text}\n\nAdditional consultant instruction:\n${trimmed}`, [], base, true, original.displayText);
+      return;
+    }
     // Re-send as text-only from the edited point; base history drops the old
     // turn and everything after it. (Chip panel contents aren't retained.)
     sendMessage(trimmed, [], base, true);
@@ -638,7 +820,9 @@ export default function GeminiPromptPill({
 
     if (baseHistoryOverride) setChatHistory([...baseHistoryOverride, entry]);
     else setChatHistory(prev => [...prev, entry]);
-    setChatOpen(true);
+    // Keep the first request inside the glowing pill. Once a completed reply
+    // exists, follow-ups retain the open conversation panel.
+    setChatOpen(prevHistory.some(item => item.type === 'assistant'));
     setPreHistoryOpen(false);
     loadingStartRef.current = Date.now();
     setIsLoading(true);
@@ -686,6 +870,9 @@ export default function GeminiPromptPill({
     let answer = '';
     let articles: GuideArticle[] = [];
     let actions: AppAction[] = [];
+    let thinking: string[] = [];
+    let evidence: AnswerEvidence[] = [];
+    let suggestedModel: ChatEntry['suggestedModel'];
     setStreamingText('');
     const aborter = new AbortController();
     abortRef.current = aborter;
@@ -720,12 +907,16 @@ export default function GeminiPromptPill({
           try {
             const parsed = JSON.parse(payload);
             if (parsed.token) { answer += parsed.token; setStreamingText(answer); }
+            else if (parsed.thought) { /* streaming status is intentionally visual-only */ }
             else if (parsed.done) {
               answer = parsed.text || answer;
               articles = Array.isArray(parsed.articles) ? parsed.articles : [];
               actions = Array.isArray(parsed.actions) ? parsed.actions : [];
+              thinking = Array.isArray(parsed.thinking) ? parsed.thinking : [];
+              evidence = Array.isArray(parsed.evidence) ? parsed.evidence : [];
             }
             else if (parsed.error) {
+              if (parsed.suggestedModel) suggestedModel = { id: parsed.suggestedModel, label: parsed.suggestedModelLabel || 'Gemini 3.1 Flash Lite' };
               answer = parsed.error === 'Failed to reach Gemini API'
                 ? '⚠️ **Gemini API is not configured.** Please check your settings or `.env` file.'
                 : `⚠️ ${parsed.error}`;
@@ -741,18 +932,18 @@ export default function GeminiPromptPill({
     setStreamingText('');
     const finalAnswer = answer || 'No response.';
     const finalActions = ensureLocalAppActions(finalAnswer, actions);
-    setChatHistory(prev => [...prev, { type: 'assistant', text: finalAnswer, articles, actions: finalActions, followups: followups.length ? followups : undefined }]);
+    setChatHistory(prev => [...prev, { type: 'assistant', text: finalAnswer, articles, actions: finalActions, followups: followups.length ? followups : undefined, thinking: thinking.length ? thinking : undefined, evidence: evidence.length ? evidence : undefined, suggestedModel }]);
     setIsLoading(false);
     setIsExpanded(true);
     setChatMinimized(false);
 
     // Auto-save conversation
-    const allMsgs = [...prevHistory, entry, { type: 'assistant' as const, text: finalAnswer, articles, actions: finalActions }];
-    const apiMsgs = allMsgs.map(e => ({ role: e.type === 'user' ? 'user' : 'assistant', content: e.chips?.length ? [e.text, ...e.chips.map(c => `[Context — ${c.label}]:\n${c.content}`)].filter(Boolean).join('\n\n') : e.text, chips: e.chips?.length ? e.chips.map(c => ({ label: c.label })) : null, articles: e.articles?.length ? e.articles : null, actions: e.actions?.length ? e.actions : null }));
+    const allMsgs = [...prevHistory, entry, { type: 'assistant' as const, text: finalAnswer, articles, actions: finalActions, thinking: thinking.length ? thinking : undefined, evidence: evidence.length ? evidence : undefined }];
+    const apiMsgs = allMsgs.map(e => ({ role: e.type === 'user' ? 'user' : 'assistant', content: e.chips?.length ? [e.text, ...e.chips.map(c => `[Context — ${c.label}]:\n${c.content}`)].filter(Boolean).join('\n\n') : e.text, displayContent: e.displayText || null, chips: e.chips?.length ? e.chips.map(c => ({ label: c.label })) : null, articles: e.articles?.length ? e.articles : null, actions: e.actions?.length ? e.actions : null, evidence: e.evidence?.length ? e.evidence : null }));
     fetch('/api/conversations', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: conversationIdRef.current, messages: apiMsgs, source: 'pill' }),
+      body: JSON.stringify({ id: conversationIdRef.current, title: conversationTitleFor(allMsgs), messages: apiMsgs, source: 'pill' }),
     }).then(r => r.json()).then(d => { if (d.id) conversationIdRef.current = d.id; }).catch(() => {});
   };
 
@@ -785,6 +976,7 @@ export default function GeminiPromptPill({
       chips: entry.chips?.map(c => ({ label: c.label })),
       articles: entry.articles,
       actions: entry.actions,
+      evidence: entry.evidence,
       timestamp: Date.now() + i,
     }));
     // When the last entry is still loading, pass it as pendingQuery with its display label
@@ -820,7 +1012,15 @@ export default function GeminiPromptPill({
         const idx = s.indexOf('[Context — ');
         return idx >= 0 ? s.slice(0, idx).trim() : s;
       };
-      const entries: ChatEntry[] = d.messages.map((m: any) => ({ type: m.role === 'user' ? 'user' as const : 'assistant' as const, text: m.role === 'user' ? stripChipDump(m.content) : m.content, chips: m.chips?.map((c: any) => ({ label: c.label, content: '' })), articles: m.articles?.length ? m.articles : undefined, actions: m.actions?.length ? m.actions : undefined }));
+      const entries: ChatEntry[] = d.messages.map((m: any) => ({
+        type: m.role === 'user' ? 'user' as const : 'assistant' as const,
+        text: m.role === 'user' ? stripChipDump(m.content) : m.content,
+        displayText: typeof m.displayContent === 'string' ? m.displayContent : undefined,
+        chips: m.chips?.map((c: any) => ({ label: c.label, content: '' })),
+        articles: m.articles?.length ? m.articles : undefined,
+        actions: m.actions?.length ? m.actions : undefined,
+        evidence: m.evidence?.length ? m.evidence : undefined,
+      }));
       setChatHistory(entries);
       conversationIdRef.current = id;
       setHistoryView(false);
@@ -868,37 +1068,34 @@ export default function GeminiPromptPill({
 
   const visible = !isAiPanelOpen;
   const trimmedSearchQuery = searchQuery.trim();
-  const showSearchPanel = isExpanded && !chatOpen && !preHistoryOpen && !selectorActive && trimmedSearchQuery.length > 0;
+  // Questions are sent to Gemini on Enter; this panel is reserved for actual
+  // indexed results only, never an "Ask Gemini" proxy row.
+  const showSearchPanel = isExpanded && !chatOpen && !preHistoryOpen && !selectorActive && searchResults.length > 0;
   const groupedSearchResults = ([
-    { type: 'ticket' as const, label: 'Tickets' },
-    { type: 'guide' as const, label: 'User Guide' },
-    { type: 'nav' as const, label: 'Everything Else' },
+    { type: 'guide' as const, label: 'User Guide', icon: 'menu_book' },
+    { type: 'ticket' as const, label: 'Tickets', icon: 'confirmation_number' },
+    { type: 'nav' as const, label: 'Navigation', icon: 'grid_view' },
   ]).map(group => ({
     ...group,
     items: searchResults.filter(item => item.type === group.type),
   })).filter(group => group.items.length > 0);
   const searchResultCount = groupedSearchResults.reduce((total, group) => total + group.items.length, 0);
-  const searchPanelHeight = groupedSearchResults.length > 0
-    ? Math.min(420, 57 + 18 + groupedSearchResults.length * 46 + searchResultCount * 64)
-    : 128;
-  const searchSuggestionItems = searchResults.slice(0, 3);
-  const searchSuggestionLabel = (item: GeminiSearchItem) => {
-    if (item.type !== 'guide' || !item.subtitle) return item.title;
-    const crumbs = item.subtitle
-      .split('/')
-      .map(part => part.trim())
-      .filter(Boolean)
-      .filter((part, idx) => idx !== 0 || part.toLowerCase() !== 'user guide');
-    const category = crumbs[crumbs.length - 1];
-    if (!category || category.toLowerCase() === item.title.toLowerCase()) return item.title;
-    return `${item.title} · ${category}`;
-  };
+  const activeSearchGroup = groupedSearchResults.find(group => group.type === activeSearchCategory) ?? groupedSearchResults[0];
+  // Keep the picker calm and consistent: a single result should not shrink the
+  // surface underneath the user while they are deciding what to open.
+  const searchPanelHeight = Math.max(420, Math.min(470, 118 + (activeSearchGroup?.items.length ?? 0) * 62));
   const searchCrumbs = (item: GeminiSearchItem) =>
     (item.subtitle || '')
       .split('/')
       .map(part => part.trim())
       .filter(Boolean)
       .filter((part, idx) => idx !== 0 || part.toLowerCase() !== 'user guide');
+
+  useEffect(() => {
+    if (!activeSearchCategory || !groupedSearchResults.some(group => group.type === activeSearchCategory)) {
+      setActiveSearchCategory(groupedSearchResults[0]?.type ?? null);
+    }
+  }, [activeSearchCategory, searchResultCount]);
 
   const selectSearchResult = (item: GeminiSearchItem, source: 'result' | 'suggestion' = 'result') => {
     onSelectSearchResult?.(item, source);
@@ -918,8 +1115,8 @@ export default function GeminiPromptPill({
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 32, scale: 0.92, transition: { duration: 0.18, ease: [0.3, 0, 0.8, 0.15] } }}
           transition={{ type: 'spring', stiffness: 380, damping: 22, mass: 0.9 }}
-          className="fixed bottom-6 inset-x-0 mx-auto z-[200] flex flex-col gap-3 pointer-events-none gemini-exclude"
-          style={{ width: 680, maxWidth: '92vw' }}
+          className="fixed bottom-6 inset-x-0 mx-auto z-[200] flex flex-col gap-3 pointer-events-none gemini-exclude transition-[width] duration-150"
+          style={{ width: composerWidth, maxWidth: 'calc(100vw - 48px)' }}
         >
 
           {/* ── Chat panel ── */}
@@ -957,7 +1154,6 @@ export default function GeminiPromptPill({
                         <span className="material-symbols-outlined text-[18px]">arrow_back</span>
                       </button>
                       <span className={cn('text-[15px] font-bold flex-1', isDark ? 'text-white' : 'text-[#1D192B]')}>History</span>
-                      <span className="text-[10px] font-semibold px-1.5 py-0.5 bg-[#1A73E8]/20 text-[#1A73E8] dark:text-[#74BBFF] rounded-full border border-[#1A73E8]/30">Alpha</span>
                       <button type="button" onClick={() => { setHistoryView(false); setChatHistory([]); conversationIdRef.current = null; }} className={cn('w-6 h-6 flex items-center justify-center rounded-full transition-colors', isDark ? 'text-white/30 hover:text-white/60 hover:bg-white/8' : 'text-black/30 hover:text-black/55 hover:bg-black/5')} title="New chat">
                         <span className="material-symbols-outlined text-[16px]">edit_square</span>
                       </button>
@@ -967,12 +1163,8 @@ export default function GeminiPromptPill({
                     </>
                   ) : (
                     <>
-                      <button type="button" onClick={() => setHistoryView(true)} className={cn('w-6 h-6 flex items-center justify-center rounded-full transition-colors', isDark ? 'text-white/30 hover:text-white/60 hover:bg-white/8' : 'text-black/30 hover:text-black/55 hover:bg-black/5')}>
-                        <span className="material-symbols-outlined text-[18px]">menu</span>
-                      </button>
-                      <GeminiIcon className="w-5 h-5 shrink-0" />
+                      <GeminiIcon className="w-4 h-4 shrink-0" />
                       <span className={cn('text-[15px] font-bold flex-1', isDark ? 'text-white' : 'text-[#1D192B]')}>Gemini</span>
-                      <span className="text-[10px] font-semibold px-1.5 py-0.5 bg-[#1A73E8]/20 text-[#1A73E8] dark:text-[#74BBFF] rounded-full border border-[#1A73E8]/30">Alpha</span>
                       <button type="button" onClick={() => { setChatHistory([]); conversationIdRef.current = null; setChatOpen(false); setIsExpanded(true); setPillStartersDismissed(false); }} className={cn('w-6 h-6 flex items-center justify-center rounded-full transition-colors', isDark ? 'text-white/30 hover:text-white/60 hover:bg-white/8' : 'text-black/30 hover:text-black/55 hover:bg-black/5')} title="New chat">
                         <span className="material-symbols-outlined text-[16px]">edit_square</span>
                       </button>
@@ -1020,6 +1212,7 @@ export default function GeminiPromptPill({
                                       value={editingText}
                                       ref={el => { if (el) { el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px`; } }}
                                       onChange={e => setEditingText(e.target.value)}
+                                      placeholder={isWorkspacePromptEntry(entry) ? `Add detail for ${entry.displayText}...` : undefined}
                                       onKeyDown={e => {
                                         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitEdit(); }
                                         else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
@@ -1064,7 +1257,7 @@ export default function GeminiPromptPill({
                                   </div>
                                 ) : entry.displayText ? (
                                   <div className={cn('flex items-center gap-2 pl-3 pr-3.5 py-2.5 rounded-2xl rounded-br-sm', t.userBubble)}>
-                                    <span className="material-symbols-outlined text-[15px] shrink-0 opacity-70">auto_stories</span>
+                                    <span className="material-symbols-outlined text-[15px] shrink-0 opacity-70">{displayTextIcon(entry.displayText)}</span>
                                     <p className="text-[12px] leading-relaxed font-medium">{entry.displayText}</p>
                                   </div>
                                 ) : (
@@ -1095,16 +1288,57 @@ export default function GeminiPromptPill({
                               </div>
                             ) : (
                               <div className="group w-full">
-                                <div className="flex gap-2 items-start w-full">
-                                  <GeminiIcon className={cn("w-4 h-4 shrink-0 mt-0.5", isLoading && i === chatHistory.length - 1 && "gemini-twinkle")} />
-                                  <MarkdownContent
-                                    className={cn('flex-1 min-w-0 text-[12px] leading-relaxed ai-prose', t.prose, t.aiText)}
-                                    content={entry.text}
-                                    inlineActions={entry.actions}
-                                    onRunAction={onRunAction}
-                                    isDark={isDark}
-                                  />
-                                </div>
+                                {entry.thinking && entry.thinking.length > 0 ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={event => {
+                                        event.stopPropagation();
+                                        setOpenThinkingMessage(current => current === i ? null : i);
+                                      }}
+                                      aria-label={openThinkingMessage === i ? 'Hide Gemini thinking notes' : 'Show Gemini thinking notes'}
+                                      aria-expanded={openThinkingMessage === i}
+                                      className={cn('ml-1 flex h-6 items-center gap-1.5 text-[11px] font-semibold transition-colors', isDark ? 'text-white/50 hover:text-white/80' : 'text-[#7A7F87] hover:text-[#0B57D0]')}
+                                    >
+                                      <GeminiIcon className="h-4 w-4" />
+                                      <span>Thinking</span>
+                                      <span className={cn('material-symbols-outlined text-[15px] transition-transform', openThinkingMessage === i && 'rotate-180')}>expand_more</span>
+                                    </button>
+                                    <AnimatePresence initial={false}>
+                                      {openThinkingMessage === i && (
+                                        <motion.div
+                                          initial={{ opacity: 0, height: 0, y: -4 }}
+                                          animate={{ opacity: 1, height: 'auto', y: 0 }}
+                                          exit={{ opacity: 0, height: 0, y: -4 }}
+                                          transition={{ duration: 0.2, ease: [0.2, 0, 0, 1] }}
+                                          className={cn('overflow-hidden border-b-2 border-[#1A73E8] pb-3 pt-1', isDark ? 'text-white/55' : 'text-[#7A7F87]')}
+                                        >
+                                          <ul className="space-y-1 text-[11px] leading-relaxed">
+                                            {entry.thinking.map((note, noteIndex) => <li key={noteIndex}>{note}</li>)}
+                                          </ul>
+                                        </motion.div>
+                                      )}
+                                    </AnimatePresence>
+                                    <MarkdownContent
+                                      className={cn('mt-3 min-w-0 text-[12px] leading-relaxed ai-prose', t.prose, t.aiText)}
+                                      content={entry.text}
+                                      inlineActions={entry.actions}
+                                      onRunAction={onRunAction}
+                                      isDark={isDark}
+                                    />
+                                  </>
+                                ) : (
+                                  <div className="flex gap-2 items-start w-full">
+                                    <GeminiIcon className={cn("ml-1 w-4 h-4 shrink-0 mt-0.5", isLoading && i === chatHistory.length - 1 && "gemini-twinkle")} />
+                                    <MarkdownContent
+                                      className={cn('flex-1 min-w-0 text-[12px] leading-relaxed ai-prose', t.prose, t.aiText)}
+                                      content={entry.text}
+                                      inlineActions={entry.actions}
+                                      onRunAction={onRunAction}
+                                      isDark={isDark}
+                                    />
+                                  </div>
+                                )}
                                 {entry.text && (
                                   <div className="ml-[22px] mt-0.5 flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
                                     <button type="button"
@@ -1116,31 +1350,13 @@ export default function GeminiPromptPill({
                                     </button>
                                   </div>
                                 )}
-                                {entry.articles && entry.articles.length > 0 && (
-                                  <div className="mt-2 ml-[22px] flex flex-col gap-1.5" style={{ width: 'calc(100% - 22px)' }}>
-                                    {entry.articles.length > 1 && (
-                                      <span className={cn('text-[8.5px] font-black uppercase tracking-widest pl-0.5', isDark ? 'text-white/35' : 'text-black/35')}>
-                                        Suggested guides · {entry.articles.length}
-                                      </span>
-                                    )}
-                                    {entry.articles.slice(0, 3).map((art, ci) => (
-                                      <button type="button"
-                                        key={ci}
-                                        onClick={() => onOpenArticle ? onOpenArticle(art.path) : handleSplitscreen()}
-                                        className={cn('flex items-center gap-2.5 px-3 py-2.5 rounded-xl border text-left transition-colors group', t.articleCard)}
-                                      >
-                                        <DocSparkIcon className={cn('w-[18px] h-[18px] shrink-0', t.articleIcon)} />
-                                        <span className="flex-1 min-w-0">
-                                          <span className={cn('block text-[8.5px] font-bold uppercase tracking-wide', t.articleSection)}>
-                                            {entry.articles!.length > 1 ? art.section : `Suggested guide · ${art.section}`}
-                                          </span>
-                                          <span className={cn('block text-[12px] font-semibold truncate', t.articleTitle)}>{art.title}</span>
-                                        </span>
-                                        <span className={cn('material-symbols-outlined text-[15px] shrink-0 transition-transform group-hover:translate-x-0.5', isDark ? 'text-white/40' : 'text-black/35')}>arrow_outward</span>
-                                      </button>
-                                    ))}
-                                  </div>
+                                {entry.suggestedModel && (
+                                  <button type="button" onClick={() => switchSuggestedModel(entry.suggestedModel!, i)} className="ml-[22px] mt-2 inline-flex items-center gap-1.5 rounded-full bg-[#E8F0FE] px-3 py-1.5 text-[11px] font-bold text-[#0B57D0] transition-colors hover:bg-[#D2E3FC]">
+                                    <span className="material-symbols-outlined text-[15px]">autorenew</span> Switch to {entry.suggestedModel.label}
+                                  </button>
                                 )}
+                                <SourcesPill evidence={entry.evidence} isDark={isDark} onOpenArticle={onOpenArticle} />
+                                <SuggestedArticlesPill articles={entry.articles} isDark={isDark} onOpenArticle={(path) => onOpenArticle ? onOpenArticle(path) : handleSplitscreen()} />
                                 {entry.followups && entry.followups.length > 0 && (
                                   <div className="mt-2 ml-[22px] flex flex-col gap-1.5" style={{ width: 'calc(100% - 22px)' }}>
                                     <span className={cn('text-[8.5px] font-black uppercase tracking-widest pl-0.5', isDark ? 'text-white/35' : 'text-black/35')}>
@@ -1165,9 +1381,9 @@ export default function GeminiPromptPill({
                           </div>
                         ))}
 
-                        {/* Refine pills after last AI answer */}
+                          {/* Refine pills after last AI answer */}
                         {!isLoading && chatHistory.length > 0 && chatHistory[chatHistory.length - 1].type === 'assistant' && (
-                          <div className="flex flex-wrap gap-1.5 pt-0.5 pl-5">
+                          <div className="relative flex flex-wrap gap-1.5 pt-0.5 pl-5">
                             {([
                               { mode: 'shorter' as const, label: 'Shorter', icon: 'compress' },
                               { mode: 'technical' as const, label: 'Expand', icon: 'expand_content' },
@@ -1177,7 +1393,7 @@ export default function GeminiPromptPill({
                                 key={p.mode}
                                 onClick={() => {
                                   const labelMsg = p.mode === 'shorter' ? 'Make this shorter' : p.mode === 'technical' ? 'Expand the context and provide technical detail' : 'Show the supporting data';
-                                                                const prev: ChatEntry[] = [...chatHistory, { type: 'user' as const, text: labelMsg }];
+                                  const prev: ChatEntry[] = [...chatHistory, { type: 'user' as const, text: labelMsg, displayText: REFINE_DISPLAY_LABEL[p.mode] }];
                                   setChatHistory(prev);
                                   setIsLoading(true);
                                   const screen = serializeScreenContext(screenContext);
@@ -1200,9 +1416,8 @@ export default function GeminiPromptPill({
                                     const finalEntries: ChatEntry[] = [...prev, { type: 'assistant' as const, text: ans, articles: arts }];
                                     setChatHistory(finalEntries);
                                     setIsLoading(false);
-                                    // Persist refined turn back to the conversation .md
-                                    const apiMsgs = finalEntries.map(e => ({ role: e.type === 'user' ? 'user' : 'assistant', content: e.chips?.length ? [e.text, ...e.chips.map(c => `[Context — ${c.label}]:\n${c.content}`)].filter(Boolean).join('\n\n') : e.text, chips: e.chips?.length ? e.chips.map(c => ({ label: c.label })) : null }));
-                                    fetch('/api/conversations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: conversationIdRef.current, messages: apiMsgs, source: 'pill' }) }).then(r => r.json()).then(d => { if (d.id) conversationIdRef.current = d.id; }).catch(() => {});
+                                    const apiMsgs = finalEntries.map(e => ({ role: e.type === 'user' ? 'user' : 'assistant', content: e.chips?.length ? [e.text, ...e.chips.map(c => `[Context — ${c.label}]:\n${c.content}`)].filter(Boolean).join('\n\n') : e.text, displayContent: e.displayText || null, chips: e.chips?.length ? e.chips.map(c => ({ label: c.label })) : null }));
+                                    fetch('/api/conversations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: conversationIdRef.current, title: conversationTitleFor(finalEntries), messages: apiMsgs, source: 'pill' }) }).then(r => r.json()).then(d => { if (d.id) conversationIdRef.current = d.id; }).catch(() => {});
                                   }).catch(err => {
                                     setChatHistory([...prev, { type: 'assistant' as const, text: `⚠️ Could not reach Gemini: ${err.message}` }]);
                                     setIsLoading(false);
@@ -1214,23 +1429,93 @@ export default function GeminiPromptPill({
                                 {p.label}
                               </button>
                             ))}
+
+                            {/* More formats toggle */}
+                            {(() => {
+                              const MORE_FORMATS = [
+                                { mode: 'formal' as const, label: 'Formal', icon: 'work' },
+                                { mode: 'bulletize' as const, label: 'Bulletize', icon: 'format_list_bulleted' },
+                                { mode: 'standard' as const, label: 'Standard', icon: 'notes' },
+                              ];
+                              return (
+                                <div className="relative">
+                                  <button
+                                    type="button"
+                                    onClick={() => setMoreFormatsOpen(v => !v)}
+                                    title="More formats"
+                                    className={cn(
+                                      'flex items-center gap-1 px-2 py-1 rounded-full text-[10.5px] font-semibold transition-colors',
+                                      moreFormatsOpen
+                                        ? 'bg-[#1A73E8]/20 text-[#1A73E8] dark:text-[#74BBFF] dark:bg-[#74BBFF]/20'
+                                        : 'bg-[#1A73E8]/10 text-[#1A73E8] hover:bg-[#1A73E8]/20 dark:text-[#74BBFF] dark:bg-[#74BBFF]/10 dark:hover:bg-[#74BBFF]/20',
+                                    )}
+                                  >
+                                    <span className="material-symbols-outlined text-[13px]">tune</span>
+                                  </button>
+                                  <AnimatePresence>
+                                    {moreFormatsOpen && (
+                                      <motion.div
+                                        key="more-fmt"
+                                        initial={{ opacity: 0, y: 6, scale: 0.95 }}
+                                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                                        exit={{ opacity: 0, y: 6, scale: 0.95 }}
+                                        transition={{ duration: 0.13, ease: [0.175, 0.885, 0.32, 1.15] }}
+                                        className={cn(
+                                          'absolute bottom-[calc(100%+6px)] left-0 w-36 rounded-xl border py-1.5 z-[130]',
+                                          isDark
+                                            ? 'bg-[#2C2B30] border-white/10 shadow-[0_4px_20px_rgba(0,0,0,0.3)]'
+                                            : 'bg-white border-[#E0E4EC] shadow-[0_4px_20px_rgba(0,0,0,0.12)]',
+                                        )}
+                                      >
+                                        {MORE_FORMATS.map(mf => (
+                                          <button
+                                            type="button"
+                                            key={mf.mode}
+                                            onClick={() => {
+                                              setMoreFormatsOpen(false);
+                                              const labelMap: Record<string, string> = { formal: 'Make it more formal and technical', bulletize: 'Summarize as bullet points', standard: 'Rewrite in standard format' };
+                                              const labelMsg = labelMap[mf.mode];
+                                              const prev: ChatEntry[] = [...chatHistory, { type: 'user' as const, text: labelMsg, displayText: REFINE_DISPLAY_LABEL[mf.mode] }];
+                                              setChatHistory(prev);
+                                              setIsLoading(true);
+                                              const screen = serializeScreenContext(screenContext);
+                                              const histForApi = chatHistory.map(e => ({ role: e.type === 'user' ? 'user' as const : 'assistant' as const, content: e.chips?.length ? [e.text, ...e.chips.map(c => `[Context — ${c.label}]:\n${c.content}`)].filter(Boolean).join('\n\n') : e.text, timestamp: Date.now() }));
+                                              const ticketRef2 = screenContext?.kind === 'ticket' ? { id: screenContext.recordId, account: screenContext.accountKey } : undefined;
+                                              fetch('/api/user-guide/ask', {
+                                                method: 'POST',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({ prompt: `refine:${mf.mode}`, screen, ticketRef: ticketRef2, history: histForApi, mode: mf.mode, dateRange: screenContext?.dateRange ? { from: screenContext.dateRange.from, to: screenContext.dateRange.to } : undefined }),
+                                              }).then(r => r.json()).then(d => {
+                                                const ans = d.error ? `⚠️ ${d.error}` : (d.text || chatHistory[chatHistory.length - 1].text);
+                                                const arts = Array.isArray(d.articles) ? d.articles : (d.article ? [d.article] : []);
+                                                const finalEntries: ChatEntry[] = [...prev, { type: 'assistant' as const, text: ans, articles: arts }];
+                                                setChatHistory(finalEntries);
+                                                setIsLoading(false);
+                                                const apiMsgs = finalEntries.map(e => ({ role: e.type === 'user' ? 'user' : 'assistant', content: e.chips?.length ? [e.text, ...e.chips.map(c => `[Context — ${c.label}]:\n${c.content}`)].filter(Boolean).join('\n\n') : e.text, displayContent: e.displayText || null, chips: e.chips?.length ? e.chips.map(c => ({ label: c.label })) : null }));
+                                                fetch('/api/conversations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: conversationIdRef.current, title: conversationTitleFor(finalEntries), messages: apiMsgs, source: 'pill' }) }).then(r => r.json()).then(d => { if (d.id) conversationIdRef.current = d.id; }).catch(() => {});
+                                              }).catch(err => {
+                                                setChatHistory([...prev, { type: 'assistant' as const, text: `⚠️ Could not reach Gemini: ${err.message}` }]);
+                                                setIsLoading(false);
+                                              });
+                                            }}
+                                            className={cn(
+                                              'w-full flex items-center gap-2 px-3 py-2 text-[11.5px] font-medium transition-colors',
+                                              isDark ? 'text-white/90 hover:bg-white/8' : 'text-[#1F1F1F] hover:bg-[#F1F3F4]',
+                                            )}
+                                          >
+                                            <span className={cn('material-symbols-outlined text-[14px] shrink-0', isDark ? 'text-white/45' : 'text-[#5f6368]')}>{mf.icon}</span>
+                                            {mf.label}
+                                          </button>
+                                        ))}
+                                      </motion.div>
+                                    )}
+                                  </AnimatePresence>
+                                </div>
+                              );
+                            })()}
                           </div>
                         )}
 
-                        {/* Loading — stream text when tokens arrive, skeleton while waiting */}
-                        {(isLoading || (panelIsLoading && !isAiPanelOpen)) && (
-                          <div className="flex gap-2 items-start w-full">
-                            <GeminiIcon className="w-3.5 h-3.5 shrink-0 mt-0.5 gemini-twinkle" />
-                            <div className="flex-1 min-w-0 flex flex-col gap-2 pt-1">
-                              <>
-                                <div className="gemini-skel" style={{ width: '100%' }} />
-                                <div className="gemini-skel" style={{ width: '100%', animationDelay: '0.18s' }} />
-                                <div className="gemini-skel" style={{ width: '68%', animationDelay: '0.36s' }} />
-                                <ThinkingStatus className={cn('mt-0.5', t.thinkingText)} startTime={loadingStartRef.current} />
-                              </>
-                            </div>
-                          </div>
-                        )}
 
                         <div ref={messagesEndRef} />
                       </div>
@@ -1296,9 +1581,9 @@ export default function GeminiPromptPill({
                     {historyView && (
                       <motion.div
                         key="pill-history-overlay"
-                        initial={{ x: 24, opacity: 0 }}
-                        animate={{ x: 0, opacity: 1 }}
-                        exit={{ x: 24, opacity: 0 }}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
                         transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
                         onMouseDown={(e) => e.stopPropagation()}
                         className={cn('absolute inset-0 z-10 overflow-y-auto custom-scrollbar px-3 py-3', isDark ? 'bg-[#13141F]' : 'bg-white')}
@@ -1320,7 +1605,10 @@ export default function GeminiPromptPill({
                                   onClick={() => loadConversation(c.id)}
                                   className={cn('w-full text-left px-3 py-2.5 rounded-xl transition-colors flex flex-col gap-0.5 pr-8', isDark ? 'hover:bg-white/6' : 'hover:bg-black/4')}
                                 >
-                                  <span className={cn('text-[12px] font-semibold truncate', isDark ? 'text-white/90' : 'text-[#1D192B]')}>{c.title}</span>
+                                  <span className={cn('flex min-w-0 items-center gap-1.5 text-[12px] font-semibold', isDark ? 'text-white/90' : 'text-[#1D192B]')}>
+                                    {isWorkspaceDisplayTitle(c.title) && <span className="material-symbols-outlined shrink-0 text-[15px] text-[#1A73E8]">{displayTextIcon(c.title)}</span>}
+                                    <span className="truncate">{c.title}</span>
+                                  </span>
                                   <span className={cn('text-[10px]', isDark ? 'text-white/35' : 'text-[#49454F]/70')}>{new Date(c.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
                                 </button>
                                 <button type="button"
@@ -1338,26 +1626,26 @@ export default function GeminiPromptPill({
                     )}
                   </AnimatePresence>
 
+                  {/* Scroll-down arrow is anchored to the answer viewport, not the composer. */}
+                  <AnimatePresence>
+                    {showScrollDown && !historyView && (
+                      <motion.button type="button"
+                        key="pill-scroll-down"
+                        initial={{ opacity: 0, scale: 0.8, y: 8 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.8, y: 8 }}
+                        onClick={() => scrollToBottom()}
+                        className={cn(
+                          'absolute right-3 bottom-3 z-20 w-7 h-7 rounded-full flex items-center justify-center border shadow-md transition-colors',
+                          isDark ? 'bg-[#1E2035] border-white/10 text-white/70 hover:text-white' : 'bg-white border-[#E8EAED] text-[#5F6368] hover:text-[#1A73E8] hover:border-[#1A73E8]/30'
+                        )}
+                        title="Jump to latest"
+                      >
+                        <span className="material-symbols-outlined text-[18px]">arrow_downward</span>
+                      </motion.button>
+                    )}
+                  </AnimatePresence>
                 </div>
-
-                {/* Scroll-down arrow */}
-                <AnimatePresence>
-                  {showScrollDown && (
-                    <motion.button type="button"
-                      key="pill-scroll-down"
-                      initial={{ opacity: 0, scale: 0.8, y: 8 }}
-                      animate={{ opacity: 1, scale: 1, y: 0 }}
-                      exit={{ opacity: 0, scale: 0.8, y: 8 }}
-                      onClick={() => scrollToBottom()}
-                      className={cn(
-                        'absolute right-3 bottom-14 z-20 w-7 h-7 rounded-full flex items-center justify-center border shadow-md transition-colors',
-                        isDark ? 'bg-[#1E2035] border-white/10 text-white/70 hover:text-white' : 'bg-white border-[#E8EAED] text-[#5F6368] hover:text-[#1A73E8] hover:border-[#1A73E8]/30'
-                      )}
-                    >
-                      <span className="material-symbols-outlined text-[18px]">arrow_downward</span>
-                    </motion.button>
-                  )}
-                </AnimatePresence>
 
               </motion.div>
             )}
@@ -1407,62 +1695,70 @@ export default function GeminiPromptPill({
                     </button>
                   </div>
 
-                  <div className="overflow-y-auto custom-scrollbar p-3 flex flex-col gap-3">
-                    {groupedSearchResults.length > 0 ? (
-                      groupedSearchResults.map(group => (
-                        <div key={group.type} className="flex flex-col gap-2 mb-4 last:mb-0">
-                          {/* Group Title Header */}
-                          <div className={cn('px-4 py-1.5 flex items-center gap-2.5 text-xs font-black uppercase tracking-wider select-none', isDark ? 'text-[#FFA4FB]' : 'text-[#801ED7]')}>
-                            <span className="material-symbols-outlined text-[18px] leading-none">{group.items[0]?.icon}</span>
+                  <div className="overflow-y-auto custom-scrollbar px-4 pb-4">
+                    <div className={cn('flex items-end gap-5 border-b pt-2', isDark ? 'border-white/10' : 'border-outline-variant/20')}>
+                      {groupedSearchResults.map(group => {
+                        const active = activeSearchGroup?.type === group.type;
+                        return (
+                          <button
+                            key={group.type}
+                            type="button"
+                            onClick={() => setActiveSearchCategory(group.type)}
+                            className={cn(
+                              'relative flex items-center gap-2 px-3 pb-3 pt-3 text-[15px] font-bold transition-colors rounded-t-xl',
+                              active
+                                ? 'text-[#1a73e8] dark:text-[#8AB4F8]'
+                                : 'text-on-surface-variant hover:text-on-surface',
+                            )}
+                          >
+                            <span className="material-symbols-outlined text-[25px] leading-none">{group.icon}</span>
                             <span>{group.label}</span>
-                          </div>
-                          
-                          {/* MD3 List items in distinct panel */}
-                          <md-list className={cn('p-0 rounded-2xl overflow-hidden border', isDark ? 'bg-white/[0.02] border-white/8' : 'bg-[#F9F9FA] border-black/5')}>
-                            {group.items.map((item, idx) => {
-                              const pathText = item.type === 'guide'
-                                ? searchCrumbs(item).join(' › ')
-                                : item.subtitle || '';
-                              return (
-                                <React.Fragment key={`${item.type}-${item.id}`}>
-                                  {idx > 0 && <md-divider />}
-                                  <md-list-item
-                                    type="button"
-                                    onClick={() => selectSearchResult(item)}
-                                    style={{
-                                      '--md-list-item-hover-state-layer-color': isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
-                                      '--md-list-item-focus-state-layer-color': isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
-                                      '--md-list-item-headline-size': '13.5px',
-                                      '--md-list-item-headline-weight': '600',
-                                      '--md-list-item-supporting-text-size': '11px',
-                                      '--md-list-item-supporting-text-weight': '500',
-                                      '--md-list-item-leading-space': '16px',
-                                      '--md-list-item-trailing-space': '16px',
-                                    } as React.CSSProperties}
-                                  >
-                                    <div slot="headline" className={cn('font-semibold truncate', isDark ? 'text-white/95' : 'text-[#202124]')}>
-                                      {item.title}
-                                    </div>
-                                    {pathText && (
-                                      <div slot="supporting-text" className={cn('font-medium truncate', isDark ? 'text-white/44' : 'text-[#6B6470]')}>
-                                        {pathText}
-                                      </div>
-                                    )}
-                                    {item.meta && (
-                                      <span slot="end" className={cn('text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full select-none', isDark ? 'bg-white/8 text-white/50' : 'bg-black/6 text-black/55')}>
-                                        {item.meta}
-                                      </span>
-                                    )}
-                                  </md-list-item>
-                                </React.Fragment>
-                              );
-                            })}
-                          </md-list>
-                        </div>
-                      ))
-                    ) : (
-                      <div className={cn('py-8 px-5 text-center text-[13px] font-medium select-none', isDark ? 'text-white/40' : 'text-[#5f6368]')}>
-                        No results found.
+                            <span className={cn('flex h-6 min-w-6 items-center justify-center rounded-full px-1.5 text-[11px] font-black', active ? 'bg-[#5F6368] text-white' : isDark ? 'bg-white/15 text-white/70' : 'bg-[#E8EAED] text-[#5F6368]')}>
+                              {group.items.length}
+                            </span>
+                            {active && (
+                              <motion.span
+                                layoutId="gemini-search-category-indicator"
+                                className="absolute inset-x-0 -bottom-px h-[3px] rounded-t-full bg-[#1a73e8] dark:bg-[#8AB4F8]"
+                                transition={{ type: 'spring', stiffness: 500, damping: 38 }}
+                              />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {activeSearchGroup && (
+                      <div className="pt-3">
+                        {activeSearchGroup.items.map((item, idx) => {
+                          const pathText = item.type === 'guide'
+                            ? searchCrumbs(item).join(' › ')
+                            : item.subtitle || '';
+                          return (
+                            <button
+                              key={`${item.type}-${item.id}`}
+                              type="button"
+                              onClick={() => selectSearchResult(item)}
+                              className={cn(
+                                'flex w-full items-center gap-4 px-3 py-4 text-left transition-colors',
+                                idx > 0 && (isDark ? 'border-t border-white/10' : 'border-t border-[#E8EAED]'),
+                                isDark ? 'hover:bg-white/8' : 'hover:bg-[#F8F9FA]',
+                              )}
+                            >
+                              <span className="min-w-0 flex-1">
+                                <span className={cn('block truncate text-[15px] font-bold', isDark ? 'text-white/95' : 'text-[#202124]')}>
+                                  {item.title}
+                                </span>
+                                {pathText && (
+                                  <span className={cn('mt-0.5 block truncate text-[12px] font-medium', isDark ? 'text-white/50' : 'text-[#6B6470]')}>
+                                    {pathText}
+                                  </span>
+                                )}
+                              </span>
+                              <span className={cn('material-symbols-outlined shrink-0 text-[27px]', isDark ? 'text-white/35' : 'text-[#D0D3D6]')}>arrow_forward</span>
+                            </button>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -1493,7 +1789,6 @@ export default function GeminiPromptPill({
                   <div className={cn('flex items-center gap-2.5 px-4 pt-3.5 pb-3 border-b shrink-0', isDark ? 'border-white/8' : 'border-black/8')}>
                     <GeminiIcon className="w-4 h-4 shrink-0" />
                     <span className={cn('text-[14px] font-bold flex-1', isDark ? 'text-white' : 'text-[#1D192B]')}>History</span>
-                    <span className="text-[10px] font-semibold px-1.5 py-0.5 bg-[#1A73E8]/20 text-[#1A73E8] dark:text-[#74BBFF] rounded-full border border-[#1A73E8]/30">Alpha</span>
                     <button type="button"
                       onClick={(e) => { e.stopPropagation(); setChatHistory([]); conversationIdRef.current = null; setPreHistoryOpen(false); }}
                       className={cn('w-6 h-6 flex items-center justify-center rounded-full transition-colors', isDark ? 'text-white/30 hover:text-white/60 hover:bg-white/8' : 'text-black/30 hover:text-black/55 hover:bg-black/5')}
@@ -1523,7 +1818,10 @@ export default function GeminiPromptPill({
                               onClick={(e) => { e.stopPropagation(); loadConversation(c.id); setPreHistoryOpen(false); }}
                               className={cn('w-full text-left px-3 py-2.5 rounded-xl transition-colors flex flex-col gap-0.5 pr-8', isDark ? 'hover:bg-white/6' : 'hover:bg-black/4')}
                             >
-                              <span className={cn('text-[12px] font-semibold truncate', isDark ? 'text-white/90' : 'text-[#1D192B]')}>{c.title}</span>
+                              <span className={cn('flex min-w-0 items-center gap-1.5 text-[12px] font-semibold', isDark ? 'text-white/90' : 'text-[#1D192B]')}>
+                                {isWorkspaceDisplayTitle(c.title) && <span className="material-symbols-outlined shrink-0 text-[15px] text-[#1A73E8]">{displayTextIcon(c.title)}</span>}
+                                <span className="truncate">{c.title}</span>
+                              </span>
                               <span className={cn('text-[10px]', isDark ? 'text-white/35' : 'text-[#49454F]/70')}>{new Date(c.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
                             </button>
                             <button type="button"
@@ -1544,7 +1842,7 @@ export default function GeminiPromptPill({
 
             {/* ── Suggestion lane (kept mounted so the expanded pill never jumps) ── */}
             <AnimatePresence>
-              {isExpanded && !chatOpen && (!pillStartersDismissed || trimmedSearchQuery.length > 0) && (
+              {isExpanded && !chatOpen && trimmedSearchQuery.length === 0 && !pillStartersDismissed && (
                 <motion.div
                   key="pill-starters"
                   initial={{ opacity: 0 }}
@@ -1552,6 +1850,7 @@ export default function GeminiPromptPill({
                   exit={{ opacity: 0, transition: { duration: 0.12 } }}
                   onMouseEnter={handlePillMouseEnter}
                   onMouseLeave={handlePillMouseLeave}
+                  data-gemini-suggestion-lane
                   className="order-last flex flex-col items-center gap-0 pointer-events-auto w-full px-1 min-h-[44px]"
                 >
                   {/* invisible hover bridge — keeps pointer events alive as mouse travels from pill down to suggestions */}
@@ -1559,45 +1858,10 @@ export default function GeminiPromptPill({
                   <div 
                     className={cn(
                       "flex flex-row items-center justify-center gap-1.5 w-full select-none py-0.5",
-                      trimmedSearchQuery.length > 0
-                        ? "flex-nowrap overflow-x-auto no-scrollbar"
-                        : "flex-wrap"
+                      "flex-wrap"
                     )}
                   >
-                  {trimmedSearchQuery.length > 0 ? (
-                    searchSuggestionItems.length > 0 ? (
-                      searchSuggestionItems.map(item => (
-                        <button
-                          type="button"
-                          key={`${item.type}-${item.id}`}
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            selectSearchResult(item, 'suggestion');
-                          }}
-                          className={cn(
-                            'inline-flex items-center gap-1.5 h-[29px] min-w-0 max-w-[240px] px-3.5 rounded-full text-[11px] leading-none font-semibold transition-colors whitespace-nowrap shadow-[0_1px_3px_rgba(26,115,232,0.25)] shrink',
-                            isDark
-                              ? 'bg-[#1A73E8]/20 text-[#74BBFF] hover:bg-[#1A73E8]/35 border border-[#1A73E8]/35'
-                              : 'bg-[#1A73E8] text-white hover:bg-[#1557B0] border border-[#1A73E8]',
-                          )}
-                        >
-                          <span className="material-symbols-outlined text-[13px] leading-none shrink-0">{item.icon}</span>
-                          <span className="truncate min-w-0 flex-1">{searchSuggestionLabel(item)}</span>
-                          <span className={cn('text-[8px] leading-none font-black uppercase tracking-wide shrink-0', isDark ? 'text-white/45' : 'text-white/65')}>
-                            {item.type === 'ticket' ? 'Ticket' : item.type === 'guide' ? 'Guide' : 'View'}
-                          </span>
-                        </button>
-                      ))
-                    ) : (
-                      <span className={cn(
-                        'inline-flex items-center gap-1.5 h-[29px] px-3.5 rounded-full text-[11px] leading-none font-semibold border whitespace-nowrap',
-                        isDark ? 'bg-white/6 text-white/45 border-white/10' : 'bg-[#E9EEF6] text-[#5f6368] border-[#DDE5F2]',
-                      )}>
-                        <span className="material-symbols-outlined text-[13px] leading-none">travel_explore</span>
-                        Search "{trimmedSearchQuery}"
-                      </span>
-                    )
-                  ) : pillStartersLoading && pillStarters.length === 0 ? (
+                  {pillStartersLoading && pillStarters.length === 0 ? (
                     [110, 138, 90].map((w, i) => (
                       <span
                         key={i}
@@ -1646,14 +1910,14 @@ export default function GeminiPromptPill({
                 'shadow-[0_1px_3px_0_rgba(60,64,67,0.3),0_4px_8px_3px_rgba(60,64,67,0.15)]',
                 isExpanded
                   ? cn(
-                      'w-full h-14 rounded-[28px] border cursor-default shadow-[0_4px_16px_rgba(60,64,67,0.15)]',
+                      'w-full min-h-14 rounded-[28px] border cursor-default shadow-[0_4px_16px_rgba(60,64,67,0.15)]',
                       isDark ? 'bg-[#1E1D22] border-white/12' : 'bg-white border-[#E0E4EC]',
                     )
                   : cn(
-                      'w-20 h-7 rounded-full cursor-pointer transition-colors duration-200',
+                      'w-20 h-6 rounded-full cursor-pointer transition-colors duration-200',
                       isDark ? 'bg-[#1E1D22] border border-white/12' : 'bg-white border border-[#E0E4EC]',
                     ),
-              )}
+                )}
               onMouseEnter={handlePillMouseEnter}
               onMouseLeave={handlePillMouseLeave}
               onClick={() => { if (!isExpanded) { setIsExpanded(true); focusInputWhenReady(); } }}
@@ -1683,63 +1947,72 @@ export default function GeminiPromptPill({
                         key={fmt}
                         onClick={e => { e.stopPropagation(); handleFormatSelect(fmt); }}
                         className={cn(
-                          'w-full flex items-center justify-between px-4 py-2.5 text-[13px] font-medium transition-colors',
+                          'w-full flex items-center gap-2.5 justify-between px-4 py-2.5 text-[13px] font-medium transition-colors',
                           isDark ? 'text-white/90 hover:bg-white/8' : 'text-[#1F1F1F] hover:bg-[#F1F3F4]',
                           selectedFormat === fmt && 'text-[#1A73E8]',
                         )}
                       >
-                        <span>{fmt}</span>
-                        {selectedFormat === fmt && <span className="material-symbols-outlined text-[#1A73E8] text-[16px]">check</span>}
+                        <span className="flex items-center gap-2.5 min-w-0">
+                          <span className={cn('material-symbols-outlined text-[17px] shrink-0', selectedFormat === fmt ? 'text-[#1A73E8]' : isDark ? 'text-white/45' : 'text-[#5f6368]')}>{FORMAT_ICONS[fmt]}</span>
+                          <span>{fmt}</span>
+                        </span>
+                        {selectedFormat === fmt && <span className="material-symbols-outlined text-[#1A73E8] text-[16px] shrink-0">check</span>}
                       </button>
                     ))}
-                  </motion.div>
-                )}
-              </AnimatePresence>
+	                  </motion.div>
+	                )}
+	              </AnimatePresence>
 
-              {expandKey > 0 && (
+              {(isExpanded || isLoading || panelIsLoading) && (
                 <span
-                  key={expandKey}
-                  className="gemini-pill-glow-border"
-                  style={{ '--pill-glow-radius': isExpanded ? '28px' : '9999px' } as React.CSSProperties}
+                  key={isLoading || panelIsLoading ? 'pill-generating-glow' : `pill-open-glow-${pillOpenGlowKey}`}
                   aria-hidden="true"
+                  className={cn(
+                    'gemini-border-glow absolute inset-0',
+                    isExpanded ? 'rounded-[28px]' : 'rounded-full',
+                    (isLoading || panelIsLoading) ? 'gemini-border-glow-thinking' : 'gemini-border-glow-open',
+                  )}
+                  style={{ '--gemini-shell-surface': isDark ? '#1E1D22' : '#ffffff' } as React.CSSProperties}
                 />
               )}
-              {/* Perimeter sweep glow while generating in background (collapsed state) */}
-              {(isLoading || panelIsLoading) && !isExpanded && (
-                <span className="gemini-pill-loading-glow" aria-hidden="true" />
-              )}
 
-              {/* Collapsed star */}
+	              {/* Collapsed star */}
               <div className={cn(
                 'absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-10 transition-all duration-[180ms]',
                 isDark ? 'text-[#D2E3FC]' : 'text-[#041e49]',
                 isExpanded ? 'opacity-0 scale-50' : 'opacity-100 scale-100',
               )}>
-                <GeminiIcon className="w-[18px] h-[18px]" />
+                <GeminiIcon className="w-4 h-4" />
               </div>
 
               {/* Expanded grid */}
               <div className={cn(
-                'grid w-full h-full px-4 gap-3 items-center transition-all duration-[180ms] grid-cols-[auto_1fr_auto]',
+                'relative z-10 grid w-full min-h-14 px-4 py-2 gap-3 items-center transition-all duration-[180ms] grid-cols-[auto_1fr_auto]',
                 isExpanded ? 'opacity-100 visible [transition-delay:80ms]' : 'opacity-0 invisible',
               )}>
 
                 {/* Left toolbar */}
                 <div className="flex items-center gap-1">
-                  {!chatOpen && (
-                    <button type="button"
-                      onClick={e => { e.stopPropagation(); setPreHistoryOpen(v => !v); if (!preHistoryOpen) fetch('/api/conversations').then(r => r.json()).then(d => setConversations(d.conversations || [])).catch(() => {}); }}
-                      title="History"
-                      className={cn(
-                        'w-9 h-9 flex items-center justify-center rounded-full transition-colors',
-                        preHistoryOpen
-                          ? isDark ? 'bg-white/12 text-white/90' : 'bg-black/8 text-[#1F1F1F]'
-                          : isDark ? 'text-white/60 hover:bg-white/8' : 'text-[#444746] hover:bg-black/8',
-                      )}
-                    >
-                      <span className="material-symbols-outlined text-[20px]">menu</span>
-                    </button>
-                  )}
+                  <button type="button"
+                    onClick={e => {
+                      e.stopPropagation();
+                      if (chatOpen) {
+                        setHistoryView(true);
+                      } else {
+                        setPreHistoryOpen(v => !v);
+                        if (!preHistoryOpen) fetch('/api/conversations').then(r => r.json()).then(d => setConversations(d.conversations || [])).catch(() => {});
+                      }
+                    }}
+                    title="History"
+                    className={cn(
+                      'w-9 h-9 flex items-center justify-center rounded-full transition-colors',
+                      (preHistoryOpen || historyView)
+                        ? isDark ? 'bg-white/12 text-white/90' : 'bg-black/8 text-[#1F1F1F]'
+                        : isDark ? 'text-white/60 hover:bg-white/8' : 'text-[#444746] hover:bg-black/8',
+                    )}
+                  >
+                    <span className="material-symbols-outlined text-[20px]">menu</span>
+                  </button>
                   <button type="button"
                     onClick={e => { e.stopPropagation(); onSelectorToggle(!selectorActive); }}
                     title={isInvestigation ? 'Click a section tab to add its ticket data as context' : 'Add context'}
@@ -1782,7 +2055,7 @@ export default function GeminiPromptPill({
                 </div>
 
                 {/* Input */}
-                <div className="relative flex items-center min-w-0 overflow-hidden">
+                <div className="relative flex items-center min-w-0">
                   <div className="flex items-center flex-wrap gap-1 w-full">
                     {chips.map(chip => (
                       <span key={chip.label} className="inline-flex items-center gap-0.5 bg-[#D3E3FD] text-[#041e49] text-[11px] font-semibold px-2 py-0.5 rounded-lg shrink-0">
@@ -1792,28 +2065,65 @@ export default function GeminiPromptPill({
                         </button>
                       </span>
                     ))}
-                    <div
-                      ref={inputRef}
-                      contentEditable
-                      suppressContentEditableWarning
-                      onInput={e => updatePillInput((e.target as HTMLElement).innerText)}
-                      onFocus={() => { setIsFocused(true); setIsExpanded(true); }}
-                      onBlur={() => { setIsFocused(false); evaluateCollapse(); }}
-                      onClick={e => e.stopPropagation()}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault();
-                          sendMessage();
-                        } else if (e.key === 'Escape') {
-                          e.preventDefault();
-                          clearPillInput();
-                          setIsExpanded(false);
-                        }
-                      }}
-                      className={cn('flex-1 min-w-[60px] bg-transparent outline-none text-[15px] leading-6 caret-[#1A73E8]', isDark ? 'text-white' : 'text-[#1F1F1F]')}
-                    />
+                    <div className="relative flex-1 min-w-[220px] min-h-6 max-h-[92px] overflow-hidden">
+                      {isLoading ? (
+                        <span className={cn('flex h-10 items-center pl-5 text-[15px] leading-normal font-semibold', isDark ? 'text-white/75' : 'text-[#4F565E]')}>
+                          <span className="thinking-shimmer">Thinking...</span>
+                        </span>
+                      ) : (
+                        <>
+                      {inlineSuggestion && (
+                        <div aria-hidden="true" className={cn('pointer-events-none absolute inset-0 min-w-0 overflow-hidden whitespace-pre-wrap break-words text-[15px] leading-6', isDark ? 'text-white/35' : 'text-[#70757a]')}>
+                          <span className="invisible">{inputText}</span>
+                          <span>{inlineSuggestion}</span>
+                          <svg
+                            className="ml-1 inline-block h-[17px] w-[26px] align-[-3px]"
+                            width="34"
+                            height="22"
+                            viewBox="0 0 34 22"
+                            fill="none"
+                            xmlns="http://www.w3.org/2000/svg"
+                            aria-label="Tab key"
+                          >
+                            <rect x="0.5" y="0.5" width="33" height="21" rx="4.5" fill="#929292" />
+                            <text x="4" y="9.2" fill="#FFFFFF" fontFamily="Arial, Helvetica, sans-serif" fontSize="7" fontWeight="700" letterSpacing="-0.15">
+                              Tab
+                            </text>
+                            <path d="M21.5 14.25H27" stroke="#FFFFFF" strokeWidth="1" strokeLinecap="round" />
+                            <path d="M25.1 12.25L27.1 14.25L25.1 16.25" stroke="#FFFFFF" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+                            <path d="M29.25 10.5V17.5" stroke="#FFFFFF" strokeWidth="1" strokeLinecap="round" />
+                          </svg>
+                        </div>
+                      )}
+                      <textarea
+                        ref={inputRef}
+                        autoComplete="off"
+                        rows={1}
+                        value={inputText}
+                        onChange={e => updatePillInput(e.target.value)}
+                        onFocus={() => { setIsFocused(true); setIsExpanded(true); }}
+                        onBlur={() => { setIsFocused(false); evaluateCollapse(); }}
+                        onClick={e => e.stopPropagation()}
+                        onKeyDown={e => {
+                          if (e.key === 'Tab' && inlineSuggestion) {
+                            e.preventDefault();
+                            acceptInlineSuggestion();
+                          } else if (e.key === 'Enter') {
+                            e.preventDefault();
+                            sendMessage();
+                          } else if (e.key === 'Escape') {
+                            e.preventDefault();
+                            if (inlineSuggestion) setInlineSuggestion('');
+                            else { clearPillInput(); setIsExpanded(false); }
+                          }
+                        }}
+                        className={cn('relative z-10 block min-h-6 max-h-[92px] w-full min-w-0 resize-none overflow-hidden bg-transparent outline-none text-[15px] leading-6 caret-[#1A73E8]', isDark ? 'text-white' : 'text-[#1F1F1F]')}
+                      />
+                        </>
+                      )}
+                    </div>
                   </div>
-                  {!inputText && chips.length === 0 && (
+                  {!isLoading && !inputText && chips.length === 0 && (
                     <span className={cn(
                       'absolute left-0 text-[15px] leading-6 pointer-events-none whitespace-nowrap select-none',
                       selectorHint
@@ -1827,14 +2137,21 @@ export default function GeminiPromptPill({
 
                 {/* Right actions */}
                 <div className="flex items-center gap-2 shrink-0">
-                  <button type="button"
+                  <button
+                    type="button"
                     onClick={e => { e.stopPropagation(); handleSplitscreen(e); }}
-                    title="Open full Gemini panel"
-                    className={cn('w-9 h-9 flex items-center justify-center rounded-full transition-colors', isDark ? 'text-white/60 hover:bg-white/8' : 'text-[#444746] hover:bg-black/8')}
+                    title="Open Gemini panel"
+                    aria-label="Open Gemini panel"
+                    className={cn(
+                      'flex h-9 w-9 items-center justify-center rounded-full transition-colors',
+                      isDark ? 'bg-white/10 text-white/75 hover:bg-white/16' : 'bg-[#F1F3F4] text-[#5F6368] hover:bg-[#E8EAED]',
+                    )}
                   >
-                    <span className="material-symbols-outlined text-[20px]">splitscreen</span>
+                    <span className="relative block h-[19px] w-[21px]" aria-hidden="true">
+                      <span className={cn('absolute left-0 top-0 h-[19px] w-[13px] rounded-[3px]', isDark ? 'bg-white/80' : 'bg-[#5F6368]')} />
+                      <span className={cn('absolute right-0 top-[2px] h-[15px] w-[4px] rounded-full', isDark ? 'bg-white/80' : 'bg-[#5F6368]')} />
+                    </span>
                   </button>
-
                   {isLoading ? (
                     <button type="button"
                       onClick={e => {
@@ -1845,13 +2162,10 @@ export default function GeminiPromptPill({
                         setStreamingText('');
                         setChatHistory(prev => [...prev, { type: 'assistant', text: "Ok. Let's keep chatting! Your turn." }]);
                       }}
-                      className="w-9 h-9 flex items-center justify-center rounded-full transition-all bg-[#0b57d0] text-white hover:bg-[#0842a0] hover:scale-105 cursor-pointer"
+                      className="w-9 h-9 flex items-center justify-center rounded-[10px] transition-[border-radius,background-color,transform] duration-200 bg-[#0b57d0] text-white hover:bg-[#0842a0] hover:scale-105 cursor-pointer"
                       title="Stop generation"
                     >
-                      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                        <circle cx="8" cy="8" r="7.5" fill="none" stroke="currentColor" strokeWidth="1.25" opacity="0.7"/>
-                        <rect x="5" y="5" width="6" height="6" rx="1"/>
-                      </svg>
+                      <span className="h-3.5 w-3.5 rounded-[2px] bg-white" aria-hidden="true" />
                     </button>
                   ) : (
                     <button type="button"
@@ -1872,6 +2186,19 @@ export default function GeminiPromptPill({
             </div>
           </div>
 
+        </motion.div>
+      )}
+    </AnimatePresence>
+    <AnimatePresence>
+      {modelToast && (
+        <motion.div
+          initial={{ opacity: 0, y: 58, scale: 0.94 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 58, scale: 0.94 }}
+          transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+          className={cn('fixed bottom-[86px] left-1/2 z-[190] -translate-x-1/2 rounded-full border px-4 py-2 text-[12px] font-semibold shadow-lg', isDark ? 'border-white/10 bg-[#28272E] text-white/85' : 'border-[#DADCE0] bg-white text-[#3C4043]')}
+        >
+          {modelToast}
         </motion.div>
       )}
     </AnimatePresence>

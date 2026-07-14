@@ -1,4 +1,4 @@
-c_id,company_name,cluster,account_status_name,email_service_provider,region,platform_edition,contract_end_date,macro_classification,industry_rollup,current_carr
+﻿c_id,company_name,cluster,account_status_name,email_service_provider,region,platform_edition,contract_end_date,macro_classification,industry_rollup,current_carr
 ACC-TESC-001,Tesco,EU-01,Active,sparkpost,UK & Ireland,Enterprise Plus,2026-08-30,Retail,Grocery & Convenience,"£1,450,000"
 ACC-MORR-002,Morrisons,EU-01,Active,sparkpost,UK & Ireland,Enterprise,2026-12-15,Retail,Grocery & Convenience,"£820,000"
 ACC-WAIT-003,Waitrose,EU-01,Active,sparkpost,UK & Ireland,Enterprise Plus,2027-02-01,Retail,Grocery & Convenience,"£910,000"
@@ -11,3 +11,8 @@ ACC-MS-009,M&S,EU-01,Active,sparkpost,UK & Ireland,Enterprise,2027-03-12,Retail,
 ACC-BOOT-010,Boots,EU-01,Active,sendgrid,UK & Ireland,Enterprise,2026-12-01,Retail,Health & Beauty,"£870,000"
 ACC-GREG-011,Greggs,EU-01,Active,ses,UK & Ireland,Scale,2027-05-20,Food Service,Food & Beverage,"£350,000"
 ACC-ICEL-012,Iceland,EU-01,Active,sparkpost,UK & Ireland,Scale,2026-09-18,Retail,Grocery & Convenience,"£300,000"
+ACC-MONZ-016,Monzo,EU-03,Active,sendgrid,UK & Ireland,Enterprise Plus,2026-10-03,Financial Services,Financial Services,"£1,850,000"
+ACC-PRIN-017,Premier Inn,EU-03,Active,ses,UK & Ireland,Business,2027-08-19,Hospitality,Travel & Hospitality,"£210,000"
+ACC-SKY-018,Sky UK,EU-03,Active,sparkpost,UK & Ireland,Enterprise,2027-01-11,Media,Media & Entertainment,"£990,000"
+ACC-GYMG-019,The Gym Group,EU-03,Active,ses,UK & Ireland,Scale,2027-05-28,Health & Fitness,Fitness & Wellness,"£340,000"
+ACC-TRAI-020,Trainline,EU-03,Active,sendgrid,UK & Ireland,Enterprise,2026-09-14,Travel,Travel & Hospitality,"£720,000"

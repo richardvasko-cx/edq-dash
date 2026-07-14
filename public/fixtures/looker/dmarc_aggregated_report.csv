@@ -1,4 +1,9 @@
 report_date,date_range_begin_date,date_range_end_date,policy_domain,identifiers_header_from,source_ip,auth_results_spf_domain,auth_results_spf_result,auth_results_dkim_domain,auth_results_dkim_result,policy_evaluated_spf,policy_evaluated_dkim,policy_evaluated_dmarc,adkim,aspf,p,pct,dmarc_count,policy_spf_pass,policy_spf_notpass,policy_dkim_pass,policy_dkim_notpass,policy_dmarc_pass,policy_dmarc_notpass
-2026-06-18,2026-06-17,2026-06-18,mail.tesco.com,mail.tesco.com,185.12.40.11,mail.tesco.com,pass,mail.tesco.com,pass,pass,pass,pass,r,r,quarantine,100,120000,119200,800,119700,300,119600,400
-2026-06-18,2026-06-17,2026-06-18,email.morrisons.com,email.morrisons.com,185.12.40.22,email.morrisons.com,fail,email.morrisons.com,pass,fail,pass,fail,r,r,none,100,69000,60000,9000,68000,1000,61000,8000
-2026-06-18,2026-06-17,2026-06-18,mail.waitrose.com,mail.waitrose.com,185.12.40.33,mail.waitrose.com,fail,mail.waitrose.com,pass,fail,pass,fail,r,r,quarantine,100,38000,20000,18000,37500,500,20500,17500
+2026-07-21,2026-06-21,2026-07-21,mail.tesco.com,mail.tesco.com,185.12.40.11,mail.tesco.com,pass,mail.tesco.com,pass,pass,pass,pass,r,r,quarantine,100,120000,120000,0,120000,0,120000,0
+2026-07-21,2026-06-21,2026-07-21,email.morrisons.com,email.morrisons.com,185.12.40.22,email.morrisons.com,pass,email.morrisons.com,pass,pass,pass,fail,r,r,none,100,69000,69000,0,69000,0,0,69000
+2026-07-21,2026-06-21,2026-07-21,mail.waitrose.com,mail.waitrose.com,185.12.40.33,mail.waitrose.com,pass,mail.waitrose.com,pass,pass,pass,pass,r,r,quarantine,100,38000,38000,0,38000,0,38000,0
+2026-07-21,2026-06-21,2026-07-21,notify.monzo.com,mail.waitrose.com,185.12.40.46,mail.waitrose.com,pass,mail.waitrose.com,pass,pass,pass,pass,r,r,quarantine,100,38000,38000,0,38000,0,38000,0
+2026-07-21,2026-06-21,2026-07-21,bookings.premierinn.co.uk,mail.waitrose.com,185.12.40.47,mail.waitrose.com,pass,mail.waitrose.com,pass,pass,pass,pass,r,r,quarantine,100,38000,38000,0,38000,0,38000,0
+2026-07-21,2026-06-21,2026-07-21,email.sky.co.uk,mail.waitrose.com,185.12.40.48,mail.waitrose.com,pass,mail.waitrose.com,pass,pass,pass,pass,r,r,quarantine,100,38000,38000,0,38000,0,38000,0
+2026-07-21,2026-06-21,2026-07-21,mail.thegymgroup.co.uk,mail.waitrose.com,185.12.40.49,mail.waitrose.com,pass,mail.waitrose.com,pass,pass,pass,pass,r,r,quarantine,100,38000,38000,0,38000,0,38000,0
+2026-07-21,2026-06-21,2026-07-21,email.trainline.com,mail.waitrose.com,185.12.40.50,mail.waitrose.com,pass,mail.waitrose.com,pass,pass,pass,pass,r,r,quarantine,100,38000,38000,0,38000,0,38000,0

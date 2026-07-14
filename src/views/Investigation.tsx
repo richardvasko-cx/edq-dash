@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { cn } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
 import { DraftSparkIcon } from '../components/SparkIcons';
@@ -6,12 +7,11 @@ import { marked } from 'marked';
 import UserGuideCenter from '../components/UserGuideCenter';
 import { AccountDetailsPanel } from '../components/investigation/OverviewLookerPanels';
 import { DeliverabilityDiagnosticsDashboard } from '../components/investigation/DeliverabilityPanels';
-import { EmailPerformanceMetricsPanel } from '../components/investigation/EmailPerformancePanels';
-import HistoricalMetricsPanel from '../components/charts/HistoricalMetricsPanel';
+import { EMAIL_PANEL_METRICS, EMAIL_PANEL_TITLES, EmailPerformanceDashboard, type EmailPerformancePanelKey } from '../components/investigation/EmailPerformancePanels';
 import DateRangeControl, { type DateRange } from '../components/charts/DateRangeControl';
 import MetricsFilterSheet from '../components/charts/MetricsFilterSheet';
 import { EMPTY_FILTERS, type ResourceFilters, type ResourceKey } from '../components/charts/MetricsFilterTypes';
-import PanelCustomizeSheet, { PanelRemoveButton, type PanelOutlineItem } from '../components/charts/PanelCustomizeSheet';
+import PanelCustomizeSheet, { type PanelOutlineItem } from '../components/charts/PanelCustomizeSheet';
 import CaseThreadPanel from '../components/investigation/CaseThreadPanel';
 import WorkspacePanels from '../components/investigation/WorkspacePanels';
 import NextStepsPanel from '../components/investigation/NextStepsPanel';
@@ -20,9 +20,10 @@ import { isClosedCase, type CaseRecord } from '../data';
 import { useCaseDataset } from '../hooks/useCaseDataset';
 import { useHistoricalMetrics } from '../hooks/useHistoricalMetrics';
 import { rankRelevant } from '../services/historyRelevance';
-import { authCheckFromTicket, authCheckSummary, checkTicketAuthWithGoogleDig, normalizeDomain, type TicketAuthCheck } from '../services/googleDigAuth';
+import { authCheckFromTicket, authCheckSummary, dnsTypeName, runTicketAuthScan, type AuthFindingStatus, type AuthScanResult, type DigAuthStatus, type DnsRecordType, type TicketAuthCheck } from '../services/googleDigAuth';
 import { providerDisplayName } from '../services/providerRouting';
 import { getEnabledMetricKeysForProvider, getMetricCatalogForProvider } from '../services/metricCatalog';
+import { md3Ease, md3Enter } from '../lib/md3Motion';
 
 // Register @material/web elements
 import '@material/web/progress/circular-progress.js';
@@ -74,6 +75,24 @@ export default function Investigation({
   };
   const messages = (selectedTicketId ? ticketMessages[selectedTicketId] : null)
     || (currentTicket ? [{ role: 'model' as const, text: `Reviewing ${currentTicket.account_name} (${currentTicket.case_number}). ${currentTicket.root_cause_summary} Want me to pull the supporting evidence?` }] : []);
+  // The embedded investigation chat previously sent only the typed message, unlike
+  // the global Gemini pill. Keep it grounded in the same active case and tab so
+  // it can inspect evidence rather than asking the consultant to fetch it.
+  const investigationChatScreen = React.useMemo(() => {
+    if (!currentTicket) return `Currently viewing: ${activeSection}`;
+    const metrics = currentTicket.metrics;
+    const topBounce = currentTicket.bounces?.[0];
+    return [
+      `Currently viewing: Support ticket · ${activeSection}`,
+      `Account: ${currentTicket.account_name}`,
+      `Reference: ${currentTicket.case_number}`,
+      `Issue: ${currentTicket.case_subject}`,
+      `Root cause on record: ${currentTicket.root_cause_summary}`,
+      `Authentication: SPF ${currentTicket.spf_status}; DKIM ${currentTicket.dkim_status}; DMARC ${currentTicket.dmarc_status}`,
+      `Metrics: accepted ${(metrics.accepted_rate * 100).toFixed(1)}%; bounce ${(metrics.bounce_rate * 100).toFixed(1)}%; delayed ${(metrics.delayed_rate * 100).toFixed(1)}%; open ${(metrics.nonprefetched_open_rate * 100).toFixed(1)}%; complaints ${(metrics.spam_complaint_rate * 100).toFixed(2)}%`,
+      topBounce ? `Dominant delivery signal: ${topBounce.classification} at ${topBounce.domain} — ${topBounce.reason}` : '',
+    ].filter(Boolean).join('\n');
+  }, [activeSection, currentTicket?.case_number]);
 
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -96,14 +115,18 @@ export default function Investigation({
   const [workspaceMode, setWorkspaceMode] = useState<'panels' | 'chat'>('panels');
   const [panelStates, setPanelStates] = useState<Record<string, 'pending' | 'accepted' | 'rejected'>>({});
   const [emailCustomizeOpen, setEmailCustomizeOpen] = useState(false);
-  const [emailEditMode, setEmailEditMode] = useState(false);
   const [hiddenEmailPanels, setHiddenEmailPanels] = useState<Set<string>>(() => new Set());
+  const [pendingWorkspaceJump, setPendingWorkspaceJump] = useState<{ section: string; panelLabel: string } | null>(null);
+  const [workspaceReviewBack, setWorkspaceReviewBack] = useState<{ section: string; panelLabel: string } | null>(null);
 
   const [emailSelectedMetrics, setEmailSelectedMetrics] = useState<string[]>([
     'count_nonprefetched_unique_confirmed_opened', 'count_unique_clicked', 'nonprefetched_open_rate', 'click_through_rate'
   ]);
   const [emailFilters, setEmailFilters] = useState<ResourceFilters>(EMPTY_FILTERS);
   const [emailMetricsOpen, setEmailMetricsOpen] = useState(false);
+  const [emailMetricContext, setEmailMetricContext] = useState<EmailPerformancePanelKey | null>(null);
+  const [emailSubview, setEmailSubview] = useState<'overview' | 'audience' | 'receiver' | 'campaigns'>('overview');
+  const [deliverabilityScope, setDeliverabilityScope] = useState<ResourceFilters | undefined>();
 
   const caseRows = React.useMemo(
     () => currentTicket ? historicalMetrics.forCase(currentTicket.case_number) : [],
@@ -151,13 +174,11 @@ export default function Investigation({
           recipientDomains: emailFilters.recipientDomains,
           ipPools: emailFilters.ipPools,
           mailboxProviders: emailFilters.mailboxProviders,
-          campaigns: emailFilters.campaigns,
           subaccounts: emailFilters.subaccounts,
           selectedDomain: emailFilters.sendingDomains[0] ?? '',
           selectedSendingDomain: emailFilters.sendingDomains[0] ?? '',
           selectedIp: emailFilters.sendingIps[0] ?? '',
           selectedIsp: emailFilters.mailboxProviders[0] ?? '',
-          selectedCampaign: emailFilters.campaigns[0] ?? '',
           selectedSubaccount: emailFilters.subaccounts[0] ?? '',
         }
       }));
@@ -225,26 +246,44 @@ export default function Investigation({
 
 
   // Authentication Validator State
-  const [dmarcDomain, setDmarcDomain] = useState('');
-  const [dkimSelector, setDkimSelector] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [authResults, setAuthResults] = useState<TicketAuthCheck | null>(null);
+  const [authScan, setAuthScan] = useState<AuthScanResult | null>(null);
+  const [authViewMode, setAuthViewMode] = useState<'smart' | 'raw'>('raw');
+  const [authScopeOpen, setAuthScopeOpen] = useState(false);
+  const [authScopeTab, setAuthScopeTab] = useState<'domains' | 'ips'>('domains');
+  const [selectedAuthLookup, setSelectedAuthLookup] = useState<string>('');
+  const [selectedAuthScope, setSelectedAuthScope] = useState('all');
+  const [authRecordType, setAuthRecordType] = useState<DnsRecordType>('TXT');
 
   const ticketDomain = currentTicket?.sending_domains?.[0] ?? '';
-  const ticketDkimSelector = currentTicket?.dkim_selector ?? '';
   useEffect(() => {
-    setDmarcDomain(ticketDomain);
-    setDkimSelector(ticketDkimSelector);
     setAuthResults(null);
-  }, [selectedTicketId, ticketDomain, ticketDkimSelector]);
+    setAuthScan(null);
+    setSelectedAuthLookup('');
+    setSelectedAuthScope('all');
+    setAuthRecordType('TXT');
+    setAuthViewMode('raw');
+  }, [selectedTicketId, ticketDomain]);
 
-  const runAuthValidation = async () => {
-    const domain = normalizeDomain(dmarcDomain);
-    if (!domain) return;
+  const runAuthValidation = async (force = false) => {
+    if (!currentTicket) return;
 
     setAuthLoading(true);
+    if (force) {
+      setAuthScan(null);
+      setAuthResults(null);
+      setSelectedAuthLookup('');
+    }
     try {
-      setAuthResults(await checkTicketAuthWithGoogleDig({ domain, selector: dkimSelector }));
+      const scan = await runTicketAuthScan(currentTicket, { force });
+      setAuthScan(scan);
+      setSelectedAuthLookup(scan.lookups[0]?.queryName || '');
+      setAuthResults({
+        ...authCheckFromTicket(currentTicket),
+        checkedAt: scan.checkedAt,
+        scan,
+      });
     } catch (e: any) {
       console.error(e);
       if (currentTicket) setAuthResults(authCheckFromTicket(currentTicket));
@@ -256,7 +295,60 @@ export default function Investigation({
   useEffect(() => {
     if (activeSection !== 'Authentication' || !ticketDomain || authResults || authLoading) return;
     runAuthValidation();
-  }, [activeSection, ticketDomain, ticketDkimSelector]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeSection, ticketDomain]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!pendingWorkspaceJump || activeSection !== pendingWorkspaceJump.section) return;
+    let cancelled = false;
+    let attempts = 0;
+    const tryScroll = () => {
+      if (cancelled) return;
+      const selector = `[data-gem-panel-label="${pendingWorkspaceJump.panelLabel.replace(/"/g, '\\"')}"]`;
+      const panel = document.querySelector(selector) as HTMLElement | null;
+      if (panel) {
+        panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        setPendingWorkspaceJump(null);
+        return;
+      }
+      attempts += 1;
+      if (attempts < 12) window.setTimeout(tryScroll, 120);
+    };
+    window.setTimeout(tryScroll, 0);
+    return () => { cancelled = true; };
+  }, [activeSection, pendingWorkspaceJump]);
+
+  // Gemini navigation chips persist their exact destination across the route
+  // transition. This lets a chip land on supporting evidence, not just the tab.
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('edq_gemini_app_action');
+      if (!raw) return;
+      const payload = JSON.parse(raw) as { action?: { view?: string; ticketSection?: string; panelLabel?: string } };
+      if (payload.action?.view !== 'investigation' || !payload.action.ticketSection) return;
+      sessionStorage.removeItem('edq_gemini_app_action');
+      if (payload.action.panelLabel) {
+        setPendingWorkspaceJump({ section: payload.action.ticketSection, panelLabel: payload.action.panelLabel });
+      }
+      onSectionChange(payload.action.ticketSection);
+    } catch {}
+  }, []); // Route transition only; later section changes must not replay a chip.
+
+  useEffect(() => {
+    if (activeSection === 'Workspace' && workspaceReviewBack) {
+      setWorkspaceReviewBack(null);
+    }
+  }, [activeSection, workspaceReviewBack]);
+
+  useEffect(() => {
+    setWorkspaceReviewBack(null);
+    setPendingWorkspaceJump(null);
+  }, [selectedTicketId]);
+
+  const jumpFromWorkspace = (section: string, panelLabel: string) => {
+    setWorkspaceReviewBack({ section, panelLabel });
+    setPendingWorkspaceJump({ section, panelLabel });
+    onSectionChange(section);
+  };
 
   const sendMessage = async () => {
     if (!selectedTicketId || !input.trim() || isLoading) return;
@@ -289,7 +381,9 @@ export default function Investigation({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             prompt: userMessage.text,
-            history: currentMessages.map(m => ({ role: m.role, parts: [{ text: m.text }] }))
+            history: currentMessages.map(m => ({ role: m.role, parts: [{ text: m.text }] })),
+            screen: investigationChatScreen,
+            ticketRef: currentTicket ? { id: currentTicket.case_number, account: currentTicket.account_name } : undefined,
           })
         });
       } catch {
@@ -337,10 +431,10 @@ export default function Investigation({
   };
   const emailPanelOutlineItems: PanelOutlineItem[] = [
     {
-      key: 'emailTrend',
+      key: 'performanceTrend',
       title: 'Email performance over time',
       description: 'Engagement trend chart using the selected date window and metrics.',
-      visible: emailPanelVisible('emailTrend'),
+      visible: emailPanelVisible('performanceTrend'),
       preview: (
         <div className="flex h-full flex-col justify-end gap-3">
           <div className="flex h-20 items-end gap-2">
@@ -356,10 +450,10 @@ export default function Investigation({
       ),
     },
     {
-      key: 'engagementSummary',
-      title: 'Engagement',
-      description: 'Summary cards for delivered mail, opens, clicks, and engagement rates.',
-      visible: emailPanelVisible('engagementSummary'),
+      key: 'funnel',
+      title: 'Reach and engagement',
+      description: 'Funnel from targeted volume through confirmed opens and clicks.',
+      visible: emailPanelVisible('funnel'),
       preview: (
         <div className="grid h-full grid-cols-2 gap-2">
           {[
@@ -375,6 +469,74 @@ export default function Investigation({
           ))}
         </div>
       ),
+    },
+    {
+      key: 'assessment',
+      title: 'Performance assessment',
+      description: 'Structured interpretation of delivery, placement, engagement and receiver evidence.',
+      visible: emailPanelVisible('assessment'),
+    },
+    {
+      key: 'recipientResponse',
+      title: 'Recipient response over time',
+      description: 'Clicks, unsubscribes, complaints and moved-to-spam trend signals.',
+      visible: emailPanelVisible('recipientResponse'),
+    },
+    {
+      key: 'placement',
+      title: 'Placement summary',
+      description: 'Inbox, spam and moved-folder placement signals where measured data exists.',
+      visible: emailPanelVisible('placement'),
+    },
+    {
+      key: 'engagementTrend',
+      title: 'Engagement quality over time',
+      description: 'Audience & Engagement trend view for opens, clicks, CTR and CTO.',
+      visible: emailPanelVisible('engagementTrend'),
+    },
+    {
+      key: 'responseBalance',
+      title: 'Positive versus negative response',
+      description: 'Audience response comparison across positive and negative recipient behaviour.',
+      visible: emailPanelVisible('responseBalance'),
+    },
+    {
+      key: 'volumeRelationship',
+      title: 'Volume and engagement relationship',
+      description: 'Shows whether volume changes preceded weaker engagement or complaint movement.',
+      visible: emailPanelVisible('volumeRelationship'),
+    },
+    {
+      key: 'receiverCards',
+      title: 'Receiver overview cards',
+      description: 'Compact mailbox-provider summaries for the Receiver Performance view.',
+      visible: emailPanelVisible('receiverCards'),
+    },
+    {
+      key: 'receiverTrend',
+      title: 'Receiver trend comparison',
+      description: 'Mailbox-provider trend comparison against account performance.',
+      visible: emailPanelVisible('receiverTrend'),
+    },
+    {
+      key: 'receiverTable',
+      title: 'Mailbox-provider performance',
+      description: 'Tabular receiver drill-down with delivery and engagement metrics.',
+      visible: emailPanelVisible('receiverTable'),
+    },
+    {
+      key: 'deliveryBridge',
+      title: 'Delivery-to-engagement bridge',
+      description: 'Connects weak receiver performance to related Deliverability evidence.',
+      visible: emailPanelVisible('deliveryBridge'),
+    },
+    {
+      key: 'keyContributors',
+      title: 'Key Contributors',
+      description: 'Campaign, Canvas, audience and content contribution analysis requires data not available in this prototype.',
+      visible: true,
+      disabled: true,
+      disabledLabel: 'Coming soon',
     },
   ];
 
@@ -393,19 +555,98 @@ export default function Investigation({
   const mta = currentTicket.email_service_provider;
   const providerLabel = providerDisplayName(mta);
   const liveAuth = authResults ?? authCheckFromTicket(currentTicket);
-  const liveAuthStatus = (status: string | undefined, fallback: string) =>
-    status ? status.toUpperCase() : fallback;
-  const liveSpfStatus = liveAuthStatus(liveAuth.spf.status, currentTicket.spf_status);
-  const liveDkimStatus = liveAuth.dkim ? liveAuthStatus(liveAuth.dkim.status, currentTicket.dkim_status) : 'NOT CHECKED';
-  const liveDmarcStatus = liveAuthStatus(liveAuth.dmarc.status, currentTicket.dmarc_status);
-  const liveSpfRecord = liveAuth.spf.record || currentTicket.spf_record;
-  const liveDkimRecord = liveAuth.dkim?.record || currentTicket.dkim_description;
-  const liveDmarcRecord = liveAuth.dmarc.record || currentTicket.dmarc_description;
-  const isAuthFail = (status: string) => status === 'FAIL' || status === 'NONE';
   const authGemContent = authCheckSummary(liveAuth) + ` | rDNS: ${currentTicket.rdns_status} — ${currentTicket.rdns_hostname}`;
+  const activeAuthScan = authScan ?? liveAuth.scan ?? null;
+  const statusColor = (status: AuthFindingStatus) => (
+    status === 'healthy' ? 'text-[#137333] bg-[#E6F4EA] border-[#CEEAD6]'
+    : status === 'warning' ? 'text-[#9A6700] bg-[#FEF7E0] border-[#FEEFC3]'
+    : status === 'error' ? 'text-[#B3261E] bg-[#FCE8E6] border-[#FAD2CF]'
+    : 'text-[#5F6368] bg-[#F1F3F4] border-[#E8EAED]'
+  );
+  const statusDot = (status: AuthFindingStatus) => (
+    status === 'healthy' ? 'bg-[#34A853]'
+    : status === 'warning' ? 'bg-[#F9AB00]'
+    : status === 'error' ? 'bg-[#EA4335]'
+    : 'bg-[#9AA0A6]'
+  );
+  const byCategory = (category: string) => activeAuthScan?.findings.filter(item => item.category === category) ?? [];
+  const countHealthy = (category?: string) => (category ? byCategory(category) : activeAuthScan?.findings ?? []).filter(item => item.status === 'healthy').length;
+  const countIssues = (category?: string) => (category ? byCategory(category) : activeAuthScan?.findings ?? []).filter(item => item.status === 'warning' || item.status === 'error').length;
+  const authRecordTypes: DnsRecordType[] = ['A', 'AAAA', 'CAA', 'CNAME', 'DNSKEY', 'DS', 'HTTPS', 'MX', 'NS', 'PTR', 'SOA', 'SRV', 'SVCB', 'TLSA', 'TSIG', 'TXT'];
+  const authScopes = [
+    { id: 'all', value: 'All domains', role: 'Full scan', kind: 'all' as const },
+    ...(activeAuthScan?.identities ?? []),
+  ];
+  const selectedScope = authScopes.find(item => item.id === selectedAuthScope) ?? authScopes[0];
+  const scopeMatchesText = (text: string) => {
+    if (!selectedScope || selectedScope.id === 'all') return true;
+    const value = selectedScope.value.toLowerCase();
+    const normalizedText = text.toLowerCase();
+    if (normalizedText.includes(value)) return true;
+    if ('kind' in selectedScope && selectedScope.kind === 'ip') return normalizedText.includes(value.split('.').reverse().join('.'));
+    return false;
+  };
+  const visibleAuthFindings = (activeAuthScan?.findings ?? []).filter(item =>
+    selectedAuthScope === 'all'
+      || scopeMatchesText(`${item.subject} ${item.lookupIds.join(' ')} ${item.evidence.join(' ')}`)
+  );
+  const visibleLookups = (activeAuthScan?.lookups ?? []).filter(item =>
+    item.queryType === authRecordType && (selectedAuthScope === 'all' || scopeMatchesText(`${item.queryName} ${item.answers.map(a => a.data || '').join(' ')}`))
+  );
+  const rawLookup = visibleLookups.find(item => item.queryName === selectedAuthLookup) ?? visibleLookups[0] ?? null;
+  const authVisualStatus = (status: AuthFindingStatus | DigAuthStatus | string | undefined, policy?: string): AuthFindingStatus => {
+    const normalized = `${status || ''}`.toLowerCase();
+    if (policy && policy.toLowerCase() === 'none') return 'warning';
+    if (normalized === 'healthy' || normalized === 'pass' || normalized === 'passed') return 'healthy';
+    if (normalized === 'error' || normalized === 'fail' || normalized === 'failed') return 'error';
+    if (normalized === 'warning' || normalized === 'warn' || normalized === 'none') return 'warning';
+    return 'unknown';
+  };
+  const firstFinding = (category: string) => byCategory(category)[0];
+  const spfFinding = firstFinding('SPF');
+  const dmarcFinding = firstFinding('DMARC');
+  const dkimStoredStatus = currentTicket.dkim_status === 'PASS' ? 'healthy' : currentTicket.dkim_status === 'FAIL' ? 'error' : 'warning';
+  const authVisualCards = [
+    {
+      id: 'spf',
+      label: 'SPF',
+      status: authVisualStatus(spfFinding?.status ?? liveAuth.spf.status),
+      info: spfFinding?.summary || liveAuth.spf.record || currentTicket.spf_description || 'Sender domain SPF status from account authentication data.',
+      scope: currentTicket.sending_domains?.[0] || ticketDomain,
+      lookup: activeAuthScan?.lookups.find(item => item.queryType === 'TXT' && item.queryName.replace(/\.$/, '') === (currentTicket.sending_domains?.[0] || ticketDomain)),
+    },
+    {
+      id: 'dkim',
+      label: 'DKIM',
+      status: authVisualStatus(dkimStoredStatus),
+      info: currentTicket.dkim_description || 'DKIM passes from stored account authentication status; selector DNS is not scanned in this view.',
+      scope: currentTicket.sending_domains?.[0] || ticketDomain,
+      lookup: null,
+    },
+    {
+      id: 'dmarc',
+      label: 'DMARC',
+      status: authVisualStatus(dmarcFinding?.status ?? liveAuth.dmarc.status, currentTicket.dmarc_policy),
+      info: dmarcFinding?.summary || currentTicket.dmarc_description || `DMARC policy ${currentTicket.dmarc_policy || 'not recorded'}.`,
+      scope: `_dmarc.${currentTicket.sending_domains?.[0] || ticketDomain}`,
+      lookup: activeAuthScan?.lookups.find(item => item.queryType === 'TXT' && item.queryName.replace(/\.$/, '') === `_dmarc.${currentTicket.sending_domains?.[0] || ticketDomain}`),
+    },
+  ];
+  const openAuthVisualCard = (card: typeof authVisualCards[number]) => {
+    setAuthViewMode('raw');
+    if (card.lookup) {
+      setAuthRecordType(card.lookup.queryType);
+      setSelectedAuthLookup(card.lookup.queryName);
+      return;
+    }
+    if (card.id === 'spf' || card.id === 'dmarc') {
+      setAuthRecordType('TXT');
+      setSelectedAuthLookup(card.scope);
+    }
+  };
 
   return (
-    <div className="w-full h-full overflow-y-auto custom-scrollbar bg-white dark:bg-[#121115] font-sans scroll-smooth">
+    <div className="w-full h-full overflow-y-auto overflow-x-hidden custom-scrollbar bg-white dark:bg-[#121115] font-sans scroll-smooth">
       {/* scroll-smooth only affects programmatic scrolls (panel navigation lands smoothly);
           wheel/trackpad reading stays free — no CSS scroll-snap so long panels don't jump back. */}
 
@@ -417,9 +658,9 @@ export default function Investigation({
             /* Welcome / select ticket state */
             <motion.div
               key="welcome-pane"
-              initial={{ x: -20, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              exit={{ x: -20, opacity: 0 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
               transition={{ duration: 0.15, ease: "easeInOut" }}
               className="flex flex-col items-center justify-center h-full text-center p-8 max-w-md mx-auto relative z-10 min-h-[350px]"
             >
@@ -429,9 +670,9 @@ export default function Investigation({
           ) : (
             <motion.div
               key={`detail-pane-${selectedTicketId}`}
-              initial={{ x: 16, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              exit={{ x: 16, opacity: 0 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
               transition={{ duration: 0.18, ease: "easeOut" }}
               className="max-w-[1400px] mx-auto relative z-10 w-full"
             >
@@ -445,30 +686,34 @@ export default function Investigation({
                 <span className="material-symbols-outlined text-[14px]">chevron_right</span>
                 <span className="text-[#1A73E8] font-bold">{currentTicket.case_number}</span>
               </div>
-              {drillBackId && (
-                <button
-                  onClick={() => { onSelectTicket(drillBackId); setDrillBackId(null); }}
-                  className="flex items-center gap-1.5 text-[12px] font-bold text-[#1A73E8] dark:text-[#8AB4F8] px-3 py-1.5 rounded-full border border-[#1A73E8]/30 hover:bg-[#1A73E8]/5 transition-colors"
-                >
-                  <span className="material-symbols-outlined text-[16px]">arrow_back</span>
-                  Back to {drillBackId}
-                </button>
-              )}
+              <div className="flex items-center gap-2">
+                {drillBackId && (
+                  <button
+                    onClick={() => { onSelectTicket(drillBackId); setDrillBackId(null); }}
+                    className="flex items-center gap-1.5 text-[12px] font-bold text-[#1A73E8] dark:text-[#8AB4F8] px-3 py-1.5 rounded-full border border-[#1A73E8]/30 hover:bg-[#1A73E8]/5 transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">arrow_back</span>
+                    Back to {drillBackId}
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* CONDITIONAL SECTIONS: Overview */}
             {activeSection === 'Overview' && (
-              <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-6 font-sans pb-6">
+              <motion.div {...md3Enter} transition={{ duration: 0.36, ease: md3Ease }} className="flex flex-col gap-6 font-sans pb-6">
 
                 {/* ── Ticket Info + Account Info panels ── */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <motion.div className="grid grid-cols-1 xl:grid-cols-2 gap-6" {...md3Enter} transition={{ duration: 0.36, ease: md3Ease, delay: 0.04 }}>
 
                   {/* Ticket Info Card */}
-                  <div
+                  <motion.div
                     data-gem-panel
                     data-gem-panel-label="Ticket Info"
                     data-gem-panel-content={`Ticket Info — Case: ${currentTicket.case_number} | Opened: ${currentTicket.case_created_at} | Owner: ${currentTicket.case_owner} | Status: ${currentTicket.case_status} | Subject: ${currentTicket.case_subject} | Detail: ${currentTicket.root_cause_summary}`}
                     className="bg-surface-bright dark:bg-inverse-surface/10 rounded-[28px] border border-outline-variant/60 shadow-none p-6 flex flex-col"
+                    {...md3Enter}
+                    transition={{ duration: 0.34, ease: md3Ease, delay: 0.06 }}
                   >
                     <div className="flex items-center gap-3 mb-4 select-none px-1">
                       <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center">
@@ -549,14 +794,16 @@ export default function Investigation({
                         )}
                       </AnimatePresence>
                     </div>
-                  </div>
+                  </motion.div>
 
                   {/* Account Info Card */}
-                  <div
+                  <motion.div
                     data-gem-panel
                     data-gem-panel-label="Account Info"
                     data-gem-panel-content={`Account Info — Company: ${currentTicket.account_name} | Region: eu-central-1 | Cluster: 02 | MTA: ${providerLabel} | Micro classification: Enterprise | Contract end: 2026-08-30 | Current CARR: £1,450,000`}
                     className="bg-surface-bright dark:bg-inverse-surface/10 rounded-[28px] border border-outline-variant/60 shadow-none p-6 flex flex-col"
+                    {...md3Enter}
+                    transition={{ duration: 0.34, ease: md3Ease, delay: 0.1 }}
                   >
                     <div className="flex items-center gap-3 mb-4 select-none px-1">
                       <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center">
@@ -615,15 +862,17 @@ export default function Investigation({
                         </div>
                       </md-list-item>
                     </md-list>
-                  </div>
-                </div>
+                  </motion.div>
+                </motion.div>
 
                 {/* Root Cause Analysis Summary Card */}
-                <div
+                <motion.div
                   data-gem-panel
                   data-gem-panel-label="Root Cause Analysis"
                   data-gem-panel-content={`Root Cause Analysis: ${currentTicket.root_cause_summary}`}
                   className="bg-surface-container dark:bg-inverse-surface/30 rounded-[28px] border-none shadow-none p-6 relative overflow-hidden flex flex-col gap-4"
+                  {...md3Enter}
+                  transition={{ duration: 0.36, ease: md3Ease, delay: 0.12 }}
                 >
                   <div className="flex justify-between items-center select-none">
                     <div className="flex items-center gap-3">
@@ -643,7 +892,7 @@ export default function Investigation({
                   <md-divider />
                   
                   <RootCauseBody ticket={currentTicket} />
-                </div>
+                </motion.div>
 
                 {/* Performance Metrics Grid */}
                 {(() => {
@@ -653,11 +902,13 @@ export default function Investigation({
                   const openPct = (m.nonprefetched_open_rate * 100).toFixed(1) + '%';
                   const spamPct = (m.spam_complaint_rate * 100).toFixed(1) + '%';
                   return (
-                    <div
+                    <motion.div
                       data-gem-panel
                       data-gem-panel-label="Performance Metrics"
                       data-gem-panel-content={`Accepted Rate: ${acceptedPct} | Bounce Rate: ${bouncePct} | Open Rate: ${openPct} | Spam Complaint Rate: ${spamPct} | Sent: ${m.count_sent} | Accepted: ${m.count_accepted}`}
-                      className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4"
+                      className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4"
+                      {...md3Enter}
+                      transition={{ duration: 0.36, ease: md3Ease, delay: 0.16 }}
                     >
                       {/* Accepted Rate */}
                       <div className="bg-surface-container-low dark:bg-inverse-surface/10 rounded-[24px] p-5 shadow-none border border-outline-variant/65 flex items-center justify-between gap-4">
@@ -734,289 +985,544 @@ export default function Investigation({
                           <md-icon className="absolute text-[16px] text-[#FFA524]">warning</md-icon>
                         </div>
                       </div>
-                    </div>
+                    </motion.div>
                   );
                 })()}
 
                 {/* AI SUGGESTED NEXT STEPS — grounded in RCA + metrics + redacted precedent */}
-                <NextStepsPanel ticket={currentTicket} />
+                <motion.div {...md3Enter} transition={{ duration: 0.34, ease: md3Ease, delay: 0.2 }}>
+                  <NextStepsPanel ticket={currentTicket} />
+                </motion.div>
               </motion.div>
             )}
 
             {/* CONDITIONAL SECTIONS: Authentication */}
             {activeSection === 'Authentication' && (
-              <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-8 font-sans pb-10 px-4 sm:px-6">
-                
-                {/* Header Row (Google Store specs style) */}
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-2 select-none" data-gem-panel data-gem-panel-label="Authentication Scan" data-gem-panel-content={authGemContent}>
-                  <div>
-                    <h2 className="text-3xl font-black text-on-surface dark:text-inverse-on-surface tracking-tight">Authentication</h2>
-                    <p className="text-xs text-on-surface-variant dark:text-inverse-on-surface/65 mt-1">
-                      DNS records check for <span className="font-mono text-primary dark:text-[#8AB4F8] font-bold">{ticketDomain}</span> · ISP: <span className="font-bold uppercase">{providerLabel}</span>
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <md-outlined-button onClick={() => onNavigateView?.('tools')}>
-                      Open in Tools
-                      <md-icon slot="icon">arrow_forward</md-icon>
-                    </md-outlined-button>
-                    <md-filled-button onClick={() => runAuthValidation()}>
-                      {authLoading ? 'Scanning...' : 'Re-run Scan'}
-                      <md-icon slot="icon" className={cn(authLoading && "animate-spin")}>
-                        {authLoading ? 'progress_activity' : 'autorenew'}
-                      </md-icon>
-                    </md-filled-button>
-                  </div>
-                </div>
-
-                {/* Provider context note */}
-                <div className="text-xs leading-relaxed text-on-surface-variant/85 py-1">
-                  <span className="font-extrabold text-[#1A73E8] dark:text-[#8AB4F8] uppercase tracking-wider mr-1.5">[MTA Context]</span>
-                  Expectations depend on the sending platform. This account sends via <span className="font-semibold">{providerLabel}</span>, so records are checked against that provider's selectors.
-                </div>
-
-                {/* Specs Horizontal Columns Grid */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 py-6 border-y border-outline-variant/30 select-none">
-                  {/* SPF Check column */}
-                  <div className="flex flex-col gap-1.5 pr-4 lg:border-r border-outline-variant/30">
-                    <span className="text-[10px] font-extrabold text-on-surface-variant/70 uppercase tracking-wider">SPF RECORD</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-3xl font-black text-on-surface dark:text-inverse-on-surface leading-none">{liveSpfStatus}</span>
-                      <span className={cn(
-                        "w-2.5 h-2.5 rounded-full inline-block shrink-0",
-                        isAuthFail(liveSpfStatus) ? "bg-[#C5221F]" : "bg-[#137333]"
-                      )} />
-                    </div>
-                    <span className="text-xs font-mono text-on-surface-variant/75 truncate mt-1.5" title={liveSpfRecord}>{liveSpfRecord}</span>
-                  </div>
-
-                  {/* DKIM Check column */}
-                  <div className="flex flex-col gap-1.5 px-0 lg:px-4 lg:border-r border-outline-variant/30">
-                    <span className="text-[10px] font-extrabold text-on-surface-variant/70 uppercase tracking-wider">DKIM KEYS</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-3xl font-black text-on-surface dark:text-inverse-on-surface leading-none">{liveDkimStatus}</span>
-                      <span className={cn(
-                        "w-2.5 h-2.5 rounded-full inline-block shrink-0",
-                        isAuthFail(liveDkimStatus) ? "bg-[#C5221F]" : "bg-[#137333]"
-                      )} />
-                    </div>
-                    <span className="text-xs font-mono text-on-surface-variant/75 truncate mt-1.5" title={liveDkimRecord}>{liveDkimRecord}</span>
-                  </div>
-
-                  {/* DMARC Check column */}
-                  <div className="flex flex-col gap-1.5 px-0 lg:px-4 lg:border-r border-outline-variant/30">
-                    <span className="text-[10px] font-extrabold text-on-surface-variant/70 uppercase tracking-wider">DMARC POLICY</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-3xl font-black text-on-surface dark:text-inverse-on-surface leading-none">{liveDmarcStatus}</span>
-                      <span className={cn(
-                        "w-2.5 h-2.5 rounded-full inline-block shrink-0",
-                        isAuthFail(liveDmarcStatus) ? "bg-[#C5221F]" : liveDmarcStatus === 'WARN' ? "bg-[#9A6700]" : "bg-[#137333]"
-                      )} />
-                    </div>
-                    <span className="text-xs font-mono text-on-surface-variant/75 truncate mt-1.5" title={liveDmarcRecord}>{liveDmarcRecord}</span>
-                  </div>
-
-                  {/* PTR Check column */}
-                  <div className="flex flex-col gap-1.5 pl-0 lg:pl-4">
-                    <span className="text-[10px] font-extrabold text-on-surface-variant/70 uppercase tracking-wider">PTR / RDNS</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-3xl font-black text-on-surface dark:text-inverse-on-surface leading-none">Valid</span>
-                      <span className="w-2.5 h-2.5 rounded-full inline-block bg-[#137333] shrink-0" />
-                    </div>
-                    <button onClick={() => onNavigateView?.('tools')} className="text-xs font-bold text-primary dark:text-[#8AB4F8] hover:underline bg-transparent border-none p-0 cursor-pointer text-left mt-1.5 flex items-center gap-1 select-none">
-                      Verify Reverse DNS
-                      <md-icon style={{ fontSize: '13px' }}>arrow_forward</md-icon>
+              <motion.div {...md3Enter} transition={{ duration: 0.36, ease: md3Ease }} className="flex flex-col gap-6 font-sans pb-10 px-4 sm:px-6" data-gem-panel data-gem-panel-label="Authentication Scan" data-gem-panel-content={authGemContent}>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <span className="mr-auto text-xs font-black text-[#5F6368]">
+                    {activeAuthScan ? `Last checked ${new Date(activeAuthScan.checkedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Stored account data'}
+                  </span>
+                  <div className="flex rounded-full border border-[#DADCE0] bg-white p-1 shadow-[0_2px_8px_rgba(32,33,36,0.06)]">
+                    <button
+                      type="button"
+                      disabled
+                      title="Smart view paused for review"
+                      className="h-9 cursor-not-allowed rounded-full px-4 text-sm font-black text-[#9AA0A6] opacity-55"
+                    >
+                      Smart view
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAuthViewMode('raw')}
+                      className="h-9 rounded-full bg-[#1A73E8] px-4 text-sm font-black text-white transition-colors"
+                    >
+                      Raw DNS
                     </button>
                   </div>
+                  <button onClick={() => setAuthScopeOpen(true)} className="h-11 rounded-full border border-[#DADCE0] bg-white px-4 text-sm font-black text-[#3C4043] hover:bg-[#F8F9FA] flex items-center gap-2 shadow-[0_2px_8px_rgba(32,33,36,0.06)]">
+                    <md-icon style={{ fontSize: '18px' }}>tune</md-icon>
+                    Select scope
+                  </button>
+                  <button onClick={() => runAuthValidation(true)} disabled={authLoading} className="h-11 rounded-full bg-[#1A73E8] text-white px-4 text-sm font-black hover:bg-[#1967D2] disabled:opacity-60 flex items-center gap-2 shadow-[0_2px_8px_rgba(32,33,36,0.10)]">
+                    <md-icon className={cn(authLoading && "animate-spin")} style={{ fontSize: '18px' }}>{authLoading ? 'progress_activity' : 'autorenew'}</md-icon>
+                    {authLoading ? 'Refreshing...' : 'Refresh'}
+                  </button>
                 </div>
 
-                {/* Diagnostics details row */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-                  <div>
-                    <h3 className="text-sm font-extrabold uppercase tracking-wider text-on-surface-variant/90 mb-4">Diagnostics Details</h3>
-                    <md-list style={{ background: 'transparent' } as React.CSSProperties} className="p-0">
-                      {currentTicket.diagnostics.map((item, idx) => (
-                        <React.Fragment key={idx}>
-                          <md-list-item style={{ '--md-list-item-leading-space': '0px', '--md-list-item-trailing-space': '0px' } as React.CSSProperties}>
-                            <md-icon slot="start" className={item.is_error ? "text-[#C5221F] dark:text-[#F28B82]" : "text-[#137333] dark:text-[#81C995]"}>
-                              {item.is_error ? "cancel" : "check_circle"}
-                            </md-icon>
-                            <div slot="headline" className="font-bold text-on-surface">{item.title}</div>
-                            <div slot="supporting-text" className="text-on-surface-variant/80">{item.description}</div>
-                          </md-list-item>
-                          {idx < currentTicket.diagnostics.length - 1 && <md-divider />}
-                        </React.Fragment>
+                <div className="flex flex-wrap gap-3 overflow-x-auto pb-1 no-scrollbar">
+                  {authScopes.map(scope => {
+                    const active = selectedAuthScope === scope.id;
+                    const icon = scope.id === 'all' ? 'check' : scope.kind === 'ip' ? 'dns' : 'dns';
+                    return (
+                      <button
+                        key={scope.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedAuthScope(scope.id);
+                          const next = (activeAuthScan?.lookups ?? []).find(item => {
+                            const text = `${item.queryName} ${item.answers.map(a => a.data || '').join(' ')}`.toLowerCase();
+                            return item.queryType === authRecordType && (scope.id === 'all' || text.includes(scope.value.toLowerCase()) || (scope.kind === 'ip' && text.includes(scope.value.split('.').reverse().join('.'))));
+                          });
+                          setSelectedAuthLookup(next?.queryName || '');
+                        }}
+                        className={cn(
+                          "h-12 rounded-full px-5 flex items-center gap-3 border text-[15px] font-black whitespace-nowrap transition-colors",
+                          active ? "bg-[#D2E3FC] border-[#D2E3FC] text-[#202124]" : "bg-white border-[#E8EAED] text-[#5F6368] hover:bg-[#F8F9FA]"
+                        )}
+                      >
+                        <span className="material-symbols-outlined text-[22px]">{icon}</span>
+                        {scope.value}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {authViewMode === 'smart' ? (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                      {[
+                        ['DNS configuration', `${countHealthy()} healthy`, `${countIssues()} warnings / errors`, 'dns'],
+                        ['Alignment readiness', byCategory('DKIM')[0]?.summary || 'DKIM selector not checked yet', activeAuthScan?.visibleFromDomain || ticketDomain, 'hub'],
+                        ['DMARC policy', byCategory('DMARC')[0]?.summary || currentTicket.dmarc_description, 'Policy published is not DMARC pass', 'policy'],
+                        ['IP identity', `${countHealthy('PTR')} of ${byCategory('PTR').length || currentTicket.sending_ips.length} valid`, 'PTR plus forward confirmation', 'settings_ethernet'],
+                      ].map(([title, value, sub, icon]) => (
+                        <button key={title} className="text-left rounded-2xl bg-white dark:bg-inverse-surface/10 border border-outline-variant/40 p-4 hover:border-[#1A73E8]/40 hover:shadow-sm transition">
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-[11px] uppercase tracking-wide font-black text-[#5F6368]">{title}</span>
+                            <md-icon className="text-[#1A73E8]" style={{ fontSize: '20px' }}>{icon}</md-icon>
+                          </div>
+                          <div className="mt-3 text-xl font-black text-on-surface dark:text-inverse-on-surface">{value}</div>
+                          <div className="mt-1 text-xs font-semibold text-on-surface-variant line-clamp-2">{sub}</div>
+                        </button>
                       ))}
-                    </md-list>
-                  </div>
+                    </div>
 
-                  {/* Remediation Blueprint Card (Google Store promo style layout) */}
-                  <div className="bg-surface-container-low dark:bg-inverse-surface/10 p-6 rounded-3xl border border-outline-variant/30 flex flex-col gap-4">
-                    <div>
-                      <h4 className="text-xs font-extrabold uppercase tracking-wide text-on-surface-variant/80 mb-2">Remediation Blueprint</h4>
-                      <p className="text-xs text-on-surface-variant leading-relaxed mb-4">
-                        {liveDmarcRecord || currentTicket.root_cause_summary}
-                      </p>
-
-                      <div className="mb-2">
-                        <div className="flex justify-between items-center mb-1.5 px-1 select-none">
-                          <span className="text-[10px] uppercase font-bold text-on-surface-variant/75">Correction String</span>
-                          <button 
-                            onClick={() => {
-                              navigator.clipboard.writeText(liveSpfRecord);
-                              setFixCopied(true);
-                              setTimeout(() => setFixCopied(false), 2000);
-                            }}
-                            className="text-[10px] text-[#1A73E8] dark:text-[#8AB4F8] hover:underline flex items-center gap-0.5 font-bold bg-transparent border-none cursor-pointer"
-                          >
-                            <md-icon style={{ fontSize: '12px' }}>{fixCopied ? "check" : "content_copy"}</md-icon>
-                            {fixCopied ? "Copied!" : "Copy Fix"}
-                          </button>
+                    <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-5 items-start">
+                      <div className="rounded-[28px] bg-white dark:bg-inverse-surface/10 border border-outline-variant/40 p-5 md:p-6">
+                        <div className="flex items-center justify-between gap-3 mb-5">
+                          <div>
+                            <h3 className="text-lg font-black text-on-surface dark:text-inverse-on-surface">Authentication relationship map</h3>
+                            <p className="text-xs font-semibold text-on-surface-variant">DNS configuration is separate from observed message pass/fail.</p>
+                          </div>
+                          <span className="text-xs font-black text-[#1A73E8]">{providerLabel}</span>
                         </div>
-                        <div className="bg-surface-bright dark:bg-inverse-surface p-3 rounded-2xl border border-outline-variant/45 font-mono text-xs text-on-surface dark:text-inverse-on-surface flex justify-between items-center shadow-none select-all break-all">
-                          <span>{liveSpfRecord}</span>
+                        <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-4">
+                          <div className="rounded-2xl border border-[#DADCE0] bg-[#F8F9FA] p-4">
+                            <span className="text-[10px] uppercase font-black text-[#5F6368]">Visible From</span>
+                            <div className="mt-2 font-black text-[#202124] break-all">{activeAuthScan?.visibleFromDomain || ticketDomain}</div>
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            {['DKIM', 'SPF', 'DMARC'].map(category => {
+                              const item = byCategory(category)[0];
+                              return (
+                                <div key={category} className="rounded-2xl border border-[#DADCE0] bg-white p-4 relative overflow-hidden">
+                                  <div className={cn("absolute left-0 top-0 h-full w-1", statusDot(item?.status || 'unknown'))} />
+                                  <span className="text-[10px] uppercase font-black text-[#5F6368]">{category}</span>
+                                  <div className="mt-2 text-sm font-black text-[#202124]">{item?.title || 'Not checked'}</div>
+                                  <div className="mt-1 text-xs text-[#5F6368] line-clamp-3">{item?.summary || 'Run the scan to inspect this relationship.'}</div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                        {!!byCategory('PTR').length && (
+                          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {byCategory('PTR').map(item => (
+                              <div key={item.id} className="rounded-2xl border border-[#DADCE0] bg-[#FBFCFF] p-4">
+                                <span className="text-[10px] uppercase font-black text-[#5F6368]">Sending IP</span>
+                                <div className="mt-1 font-black text-[#202124]">{item.subject}</div>
+                                <div className="mt-1 text-xs text-[#5F6368]">{item.summary}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="rounded-[28px] bg-white dark:bg-inverse-surface/10 border border-outline-variant/40 p-5">
+                        <div className={cn("inline-flex rounded-full border px-3 py-1 text-xs font-black", statusColor(activeAuthScan?.assessment.status || 'unknown'))}>
+                          {activeAuthScan?.assessment.label || 'Waiting for live scan'}
+                        </div>
+                        <p className="mt-4 text-sm font-semibold leading-relaxed text-on-surface-variant">
+                          {activeAuthScan?.assessment.summary || 'Run the authentication scan to compare live DNS configuration, identity relationships, and available message-level evidence.'}
+                        </p>
+                        <div className="mt-4 space-y-2">
+                          {(activeAuthScan?.assessment.evidence || [`Stored ticket statuses: SPF ${currentTicket.spf_status}, DKIM ${currentTicket.dkim_status}, DMARC ${currentTicket.dmarc_status}`]).map(item => (
+                            <div key={item} className="flex gap-2 text-xs font-semibold text-[#5F6368]">
+                              <span className="material-symbols-outlined text-[#1A73E8] text-[16px]">check_circle</span>
+                              <span>{item}</span>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     </div>
 
-                    <md-filled-button
-                      onClick={() => {
-                        setInput(`Draft a highly professional instructions notification email to the client (${currentTicket.contact_name}) explaining that our system detected a DNS configuration failure for domain ${ticketDomain}. Explain step-by-step how to publish the correct TXT record in their DNS control panel: "${liveSpfRecord}".`);
-                        onSectionChange('Workspace');
-                        setTimeout(() => document.getElementById('chat-input')?.focus(), 100);
-                      }}
-                      style={{ width: '100%', '--md-filled-button-container-color': '#1A73E8' } as React.CSSProperties}
-                    >
-                      <span slot="icon">
-                        <DraftSparkIcon className="w-4 h-4 shrink-0" />
-                      </span>
-                      Email Fix Instructions via Copilot
-                    </md-filled-button>
-                  </div>
-                </div>
+                    <div className="rounded-[28px] bg-white dark:bg-inverse-surface/10 border border-outline-variant/40 overflow-hidden">
+                      {visibleAuthFindings.map((item, idx) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => {
+                            setAuthViewMode('raw');
+                            const lookup = activeAuthScan?.lookups.find(row => item.lookupIds.includes(row.queryName));
+                            if (lookup) {
+                              setAuthRecordType(lookup.queryType);
+                              setSelectedAuthLookup(lookup.queryName);
+                            }
+                          }}
+                          className={cn("w-full p-4 grid grid-cols-[120px_1fr_auto] gap-3 items-center text-left hover:bg-[#F8F9FA] transition-colors", idx > 0 && "border-t border-[#E8EAED]")}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className={cn("h-2.5 w-2.5 rounded-full", statusDot(item.status))} />
+                            <span className="text-xs font-black uppercase text-[#5F6368]">{item.category}</span>
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-black text-[#202124] dark:text-inverse-on-surface truncate">{item.subject}</div>
+                            <div className="text-sm text-on-surface-variant truncate">{item.summary}</div>
+                          </div>
+                          <span className={cn("rounded-full border px-3 py-1 text-[11px] font-black", statusColor(item.status))}>
+                            {item.status === 'healthy' ? 'OK' : item.status === 'warning' ? 'Review' : item.status === 'error' ? 'Issue' : 'Unverified'}
+                          </span>
+                        </button>
+                      ))}
+                      {!activeAuthScan && (
+                        <div className="p-6 text-sm font-semibold text-on-surface-variant">Run the live scan to populate account authentication findings.</div>
+                      )}
+                      {activeAuthScan && !visibleAuthFindings.length && (
+                        <div className="p-6 text-sm font-semibold text-on-surface-variant">No findings match the selected identity.</div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex flex-col gap-5">
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                      {authVisualCards.map(card => {
+                        const healthy = card.status === 'healthy';
+                        const warning = card.status === 'warning' || card.status === 'unknown';
+                        const error = card.status === 'error';
+                        const statusText = healthy ? 'Passed' : error ? 'Issue found' : 'Review';
+                        return (
+                          <button
+                            key={card.id}
+                            type="button"
+                            onClick={() => openAuthVisualCard(card)}
+                            className="group min-h-[178px] rounded-[28px] bg-[#F4F7FB] border border-[#E8EAED] px-8 py-7 text-left shadow-[0_1px_0_rgba(60,64,67,0.06)] transition hover:border-[#D2E3FC] hover:shadow-[0_4px_16px_rgba(60,64,67,0.10)]"
+                          >
+                            <div className="flex h-full min-h-[124px] flex-col justify-between">
+                              <div className="flex items-start justify-between gap-5">
+                                <div className="min-w-0">
+                                  <div className="text-[42px] leading-none font-[500] tracking-[0.02em] text-[#5F6368]">{card.label}</div>
+                                  <div className={cn(
+                                    "mt-3 inline-flex rounded-full border px-3 py-1 text-[11px] font-black",
+                                    healthy ? "border-[#CEEAD6] bg-[#E6F4EA] text-[#137333]" :
+                                    error ? "border-[#FAD2CF] bg-[#FCE8E6] text-[#B3261E]" :
+                                    "border-[#FEEFC3] bg-[#FEF7E0] text-[#9A6700]"
+                                  )}>
+                                    {statusText}
+                                  </div>
+                                </div>
+                                <div className="shrink-0 pt-6">
+                                  {healthy ? (
+                                    <span className="material-symbols-outlined text-[82px] leading-none text-[#4285F4]" style={{ fontVariationSettings: "'FILL' 1" }}>verified_user</span>
+                                  ) : (
+                                    <span className="text-[78px] leading-none" aria-hidden="true">⚠️</span>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="mt-4 min-w-0">
+                                <div className="truncate text-[13px] font-black text-[#3C4043]">{card.scope}</div>
+                                <div className="mt-1 line-clamp-2 text-[12px] font-semibold leading-snug text-[#6F7479]">{card.info}</div>
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
 
+                    <div>
+                      <div className="text-sm font-black text-[#5F6368] mb-3">Record Type</div>
+                      <div className="flex flex-wrap gap-3">
+                        {authRecordTypes.map(type => {
+                          const active = authRecordType === type;
+                          return (
+                            <button
+                              key={type}
+                              type="button"
+                              onClick={() => {
+                                setAuthRecordType(type);
+                                const next = (activeAuthScan?.lookups ?? []).find(item =>
+                                  item.queryType === type && (selectedAuthScope === 'all' || scopeMatchesText(`${item.queryName} ${item.answers.map(a => a.data || '').join(' ')}`))
+                                );
+                                setSelectedAuthLookup(next?.queryName || '');
+                              }}
+                              className={cn(
+                                "h-11 rounded-full px-6 border text-[15px] font-black transition-colors",
+                                active ? "bg-[#1A73E8] border-[#1A73E8] text-white" : "bg-[#F5F7FB] border-[#E8EAED] text-[#5F6368] hover:bg-white"
+                              )}
+                            >
+                              {type}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {visibleLookups.map(item => (
+                        <button key={`${item.queryName}-${item.queryType}`} onClick={() => setSelectedAuthLookup(item.queryName)} className={cn("rounded-full px-4 py-2 text-xs font-black border transition-colors", selectedAuthLookup === item.queryName ? "bg-[#D2E3FC] border-[#D2E3FC] text-[#202124]" : "bg-white border-[#E8EAED] text-[#5F6368] hover:bg-[#F8F9FA]")}>
+                          {item.queryName}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="rounded-[28px] bg-[#1E1E2E] text-[#D9DADC] p-6 font-mono text-xs overflow-auto min-h-[440px]">
+                      {rawLookup ? (
+                        <>
+                          <div className="text-[#8AB4F8]">;; Google Public DNS · {rawLookup.source} · {new Date(rawLookup.checkedAt).toLocaleString()}</div>
+                          <div className="mt-3">;; QUESTION: {rawLookup.queryName} {rawLookup.queryType}</div>
+                          <div>;; DNS STATUS: {rawLookup.statusText}</div>
+                          {rawLookup.error && <div className="text-[#F28B82]">;; ERROR: {rawLookup.error}</div>}
+                          <div className="mt-4 text-[#FDD663]">;; ANSWER SECTION</div>
+                          {(rawLookup.answers || []).length ? rawLookup.answers.map((ans, idx) => (
+                            <div key={idx} className="grid grid-cols-[minmax(160px,1fr)_60px_36px_70px_minmax(220px,2fr)] gap-3 py-1">
+                              <span className="break-all">{ans.name}</span>
+                              <span>{ans.TTL ?? ''}</span>
+                              <span>IN</span>
+                              <span>{dnsTypeName(ans.type)}</span>
+                              <span className="text-[#F9AB00] break-all">{ans.data}</span>
+                            </div>
+                          )) : <div className="opacity-60">;; no answers</div>}
+                          <pre className="mt-5 whitespace-pre-wrap break-all text-[#BFC4D4]">{JSON.stringify(rawLookup.raw, null, 2)}</pre>
+                        </>
+                      ) : (
+                        <div className="h-[360px] flex flex-col items-center justify-center opacity-35">
+                          <span className="material-symbols-outlined text-4xl mb-2">code_blocks</span>
+                          <span>Ready for query</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {createPortal(
+                  <AnimatePresence>
+                    {authScopeOpen && (
+                      <>
+                        <motion.div
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={{ opacity: 0 }}
+                          transition={{ duration: 0.2 }}
+                          className="fixed inset-0 z-[120] bg-black/20"
+                          onClick={() => setAuthScopeOpen(false)}
+                        />
+                        <motion.aside
+                          initial={{ x: 'calc(100% + 24px)' }}
+                          animate={{ x: 0 }}
+                          exit={{ x: 'calc(100% + 24px)' }}
+                          transition={{ type: 'spring', damping: 32, stiffness: 320, mass: 0.9 }}
+                          style={{ willChange: 'transform' }}
+                          className="fixed bottom-4 right-4 top-[88px] z-[121] flex w-[min(500px,calc(100vw-32px))] max-h-[calc(100vh-6rem)] flex-col overflow-hidden rounded-[24px] border border-outline-variant/10 bg-white shadow-[0_12px_48px_rgba(0,0,0,0.16)] dark:bg-[#1E1D22]"
+                          role="dialog"
+                          aria-modal="true"
+                        >
+                          <div className="relative flex shrink-0 items-center justify-between border-b border-outline-variant/20 px-5">
+                            <div className="relative flex self-stretch pt-2">
+                              {([
+                                ['domains', 'Domains'],
+                                ['ips', 'IPs'],
+                              ] as const).map(([tab, label]) => (
+                                <button
+                                  key={tab}
+                                  onClick={() => setAuthScopeTab(tab)}
+                                  className={cn(
+                                    'relative z-10 w-28 rounded-t-xl pb-3 pt-3 text-center text-[15px] font-bold transition-colors',
+                                    authScopeTab === tab ? 'text-[#1a73e8] dark:text-[#8AB4F8]' : 'text-on-surface-variant hover:text-on-surface',
+                                  )}
+                                >
+                                  {label}
+                                </button>
+                              ))}
+                              <div
+                                className="absolute bottom-0 h-[3px] w-28 rounded-t-full bg-[#1a73e8] transition-transform duration-200 ease-[cubic-bezier(0.2,0,0,1)] dark:bg-[#8AB4F8]"
+                                style={{
+                                  transform: authScopeTab === 'domains' ? 'translateX(0)' : 'translateX(100%)',
+                                }}
+                              />
+                            </div>
+                            <button onClick={() => setAuthScopeOpen(false)} className="flex h-10 w-10 items-center justify-center rounded-full text-outline transition-colors hover:bg-black/5 dark:hover:bg-white/5">
+                              <span className="material-symbols-outlined text-[24px]">close</span>
+                            </button>
+                          </div>
+                          <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-5 py-4">
+                            <div className="mb-4 rounded-xl border border-outline-variant/20 bg-surface-variant/5 p-4 text-[13px] font-semibold text-on-surface-variant">
+                              Authentication scope is limited to company sender identities: sending domains and sending IPs. Mailbox providers and DKIM domain-key selectors are not scanned here.
+                            </div>
+                            {(authScopeTab === 'domains'
+                              ? (activeAuthScan?.identities || []).filter(item => item.kind === 'domain')
+                              : (activeAuthScan?.identities || []).filter(item => item.kind === 'ip')
+                            ).map(item => {
+                              const active = selectedAuthScope === item.id;
+                              return (
+                                <button
+                                  key={item.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedAuthScope(item.id);
+                                    setAuthScopeOpen(false);
+                                    const next = (activeAuthScan?.lookups ?? []).find(row => {
+                                      const text = `${row.queryName} ${row.answers.map(a => a.data || '').join(' ')}`.toLowerCase();
+                                      return row.queryType === authRecordType && (text.includes(item.value.toLowerCase()) || (item.kind === 'ip' && text.includes(item.value.split('.').reverse().join('.'))));
+                                    });
+                                    setSelectedAuthLookup(next?.queryName || '');
+                                  }}
+                                  className={cn(
+                                    'mb-3 flex w-full items-center gap-3 rounded-xl border p-4 text-left transition-colors',
+                                    active ? 'border-[#1a73e8] bg-[#E8F0FE]' : 'border-outline-variant/20 bg-surface-variant/5 hover:bg-[#F8FAFF]'
+                                  )}
+                                >
+                                  <span className="material-symbols-outlined text-[22px] text-[#1A73E8]">{item.kind === 'ip' ? 'dns' : 'storage'}</span>
+                                  <span className="min-w-0 flex-1">
+                                    <span className="block truncate text-[15px] font-black text-on-surface dark:text-inverse-on-surface">{item.value}</span>
+                                    <span className="block text-[12px] font-semibold text-on-surface-variant">{item.role}</span>
+                                  </span>
+                                  {active && <span className="material-symbols-outlined text-[20px] text-[#1A73E8]">check</span>}
+                                </button>
+                              );
+                            })}
+                            {!(activeAuthScan?.identities || []).some(item =>
+                              authScopeTab === 'domains' ? item.kind === 'domain' : item.kind === 'ip'
+                            ) && (
+                              <div className="rounded-xl border border-outline-variant/20 p-4 text-sm font-semibold text-on-surface-variant">
+                                No identities available in this category.
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex shrink-0 items-center justify-between border-t border-outline-variant/20 p-4">
+                            <button onClick={() => { setSelectedAuthScope('all'); setAuthScopeOpen(false); }} className="rounded-full px-4 py-2 text-sm font-bold text-on-surface-variant hover:bg-black/5">All domains</button>
+                            <button onClick={() => { setAuthScopeOpen(false); runAuthValidation(true); }} className="rounded-full bg-[#1A73E8] px-5 py-2.5 text-sm font-black text-white hover:bg-[#1967D2]">Refresh</button>
+                          </div>
+                        </motion.aside>
+                      </>
+                    )}
+                  </AnimatePresence>,
+                  document.body
+                )}
               </motion.div>
             )}
 
             {/* CONDITIONAL SECTIONS: Deliverability — panels go here, each with data-gem-panel + data-gem-panel-label */}
             {activeSection === 'Deliverability' && (
-              <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-6">
+              <motion.div {...md3Enter} transition={{ duration: 0.36, ease: md3Ease }} className="flex flex-col gap-6">
                 <DeliverabilityDiagnosticsDashboard
                   ticket={currentTicket}
                   dateRange={effectiveMetricRange}
                   dateControl={<DateRangeControl dates={metricDates} value={effectiveMetricRange} onChange={setSharedMetricRange} />}
                   caseHistory={caseRows}
+                  initialResourceFilters={deliverabilityScope}
                 />
               </motion.div>
             )}
 
             {/* CONDITIONAL SECTIONS: Email Performance — panels go here, each with data-gem-panel + data-gem-panel-label */}
             {activeSection === 'Email Performance' && (() => {
-              const emailActionCount = (Object.keys(emailFilters) as ResourceKey[]).reduce((n, k) => n + emailFilters[k].length, 0) + emailSelectedMetrics.length;
+              const emailActionCount = (Object.keys(emailFilters) as ResourceKey[]).filter(key => key !== 'campaigns').reduce((n, k) => n + emailFilters[k].length, 0) + emailSelectedMetrics.length;
+              const contextMetricSet = emailMetricContext ? new Set(EMAIL_PANEL_METRICS[emailMetricContext]) : null;
+              const emailSheetEnabledMetrics = contextMetricSet
+                ? emailEnabledMetrics.filter(metric => contextMetricSet.has(metric))
+                : emailEnabledMetrics;
+              const emailSheetSelectedMetrics = contextMetricSet
+                ? emailSelectedMetrics.filter(metric => contextMetricSet.has(metric))
+                : emailSelectedMetrics;
+              const applyEmailSheetMetrics = (metrics: string[]) => {
+                if (!contextMetricSet) {
+                  setEmailSelectedMetrics(metrics);
+                  return;
+                }
+                setEmailSelectedMetrics(current => {
+                  const outsidePanel = current.filter(metric => !contextMetricSet.has(metric));
+                  const insidePanel = metrics.filter(metric => contextMetricSet.has(metric) && emailEnabledMetrics.includes(metric));
+                  return [...outsidePanel, ...insidePanel];
+                });
+              };
               return (
-                <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-6">
-                  <div className="sticky top-0 z-30 py-2.5 -mt-3 flex justify-end gap-2 select-none pointer-events-none bg-transparent border-none">
-                    <div className="pointer-events-auto">
-                      <DateRangeControl dates={metricDates} value={effectiveMetricRange} onChange={setSharedMetricRange} />
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setEmailMetricsOpen(true)}
-                      className="pointer-events-auto flex h-12 items-center gap-2 rounded-full border border-outline-variant/40 bg-white px-4 text-[13px] font-semibold text-on-surface shadow-[0_6px_18px_rgba(32,33,36,0.12)] transition-colors md3-state-layer hover:bg-[#F8FAFF] dark:bg-[#201F24] dark:text-inverse-on-surface dark:hover:bg-[#2A2930]"
-                    >
-                      <span className="material-symbols-outlined text-[18px] text-on-surface-variant">tune</span>
-                      <span className="shrink-0">Metrics &amp; filters</span>
-                      {emailActionCount > 0 && (
-                        <span className="ml-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[#801ED7] px-1.5 text-[10px] font-black leading-none text-white">
-                          {emailActionCount}
-                        </span>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEmailEditMode(true);
-                        setEmailCustomizeOpen(true);
-                      }}
-                      className="pointer-events-auto inline-flex h-12 w-12 items-center justify-center rounded-full bg-[#D2E3FC] text-[#3C4043] transition-colors md3-state-layer hover:bg-[#C4D7F6]"
-                      aria-label="Customize panels"
-                    >
-                      <span className="material-symbols-outlined text-[24px]">edit</span>
-                    </button>
-                    <MetricsFilterSheet
-                      open={emailMetricsOpen}
-                      onClose={() => setEmailMetricsOpen(false)}
-                      selectedMetrics={emailSelectedMetrics}
-                      onApplyMetrics={setEmailSelectedMetrics}
-                      filters={emailFilters}
-                      onApplyFilters={setEmailFilters}
-                      options={emailOptions}
-                      metricCatalog={emailMetricCatalog}
-                      enabledMetrics={emailEnabledMetrics}
-                      initialTab="metrics"
-                      tabUnderlineLayoutId="email-perf-sheet-underline"
-                    />
-                    <PanelCustomizeSheet
-                      open={emailCustomizeOpen}
-                      onClose={() => {
-                        setEmailCustomizeOpen(false);
-                        setEmailEditMode(false);
-                      }}
-                      title="Customize Email Performance panels"
-                      subtitle="Hide panels from this view or add them back later. They keep using the selected date range and metrics."
-                      items={emailPanelOutlineItems}
-                      onShow={showEmailPanel}
-                      onHide={hideEmailPanel}
-                    />
-                  </div>
-                  {/* Historical engagement (Looker-style combo) — opens/clicks volumes + unique rate lines */}
-                  {emailPanelVisible('emailTrend') && (
-                    <div className="relative overflow-visible">
-                      {emailEditMode && <PanelRemoveButton onClick={() => hideEmailPanel('emailTrend')} />}
-                      <HistoricalMetricsPanel
-                        caseNumber={currentTicket.case_number}
-                        title="Email performance over time"
-                        defaultMetrics={['count_nonprefetched_unique_confirmed_opened', 'count_unique_clicked', 'nonprefetched_open_rate', 'click_through_rate']}
-                        range={effectiveMetricRange}
-                        onRangeChange={setSharedMetricRange}
-                        showDateControl={false}
-                        selected={emailSelectedMetrics}
-                        onSelectedChange={setEmailSelectedMetrics}
-                        filters={emailFilters}
-                        onFiltersChange={setEmailFilters}
-                        metricCatalog={emailMetricCatalog}
-                        enabledMetrics={emailEnabledMetrics}
-                        hideFilterButton={true}
-                      />
-                    </div>
-                  )}
-                  {emailPanelVisible('engagementSummary') && (
-                    <div className="relative overflow-visible">
-                      {emailEditMode && <PanelRemoveButton onClick={() => hideEmailPanel('engagementSummary')} />}
-                      <EmailPerformanceMetricsPanel accountName={currentTicket.account_name} mta={mta as any} dateRange={effectiveMetricRange} caseNumber={currentTicket.case_number} />
-                    </div>
-                  )}
+                <motion.div {...md3Enter} transition={{ duration: 0.36, ease: md3Ease }} className="flex flex-col gap-6">
+                  <EmailPerformanceDashboard
+                    rows={caseRows}
+                    range={effectiveMetricRange}
+                    filters={emailFilters}
+                    selectedMetrics={emailSelectedMetrics}
+                    hiddenPanels={hiddenEmailPanels}
+                    view={emailSubview}
+                    onViewChange={setEmailSubview}
+                    onOpenMetrics={(panelKey) => {
+                      setEmailMetricContext(panelKey);
+                      setEmailMetricsOpen(true);
+                    }}
+                    toolbar={(
+                      <div className="flex shrink-0 items-center justify-end gap-2">
+                        <DateRangeControl dates={metricDates} value={effectiveMetricRange} onChange={setSharedMetricRange} />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEmailMetricContext(null);
+                            setEmailMetricsOpen(true);
+                          }}
+                          className="flex h-12 items-center gap-2 rounded-full border border-outline-variant/40 bg-white px-4 text-[13px] font-semibold text-on-surface shadow-[0_6px_18px_rgba(32,33,36,0.12)] transition-colors md3-state-layer hover:bg-[#F8FAFF] dark:bg-[#201F24] dark:text-inverse-on-surface dark:hover:bg-[#2A2930]"
+                        >
+                          <span className="material-symbols-outlined text-[18px] text-on-surface-variant">tune</span>
+                          <span className="shrink-0">Metrics &amp; filters</span>
+                          {emailActionCount > 0 && (
+                            <span className="ml-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[#801ED7] px-1.5 text-[10px] font-black leading-none text-white">
+                              {emailActionCount}
+                            </span>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEmailCustomizeOpen(true);
+                          }}
+                          className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-[#D2E3FC] text-[#3C4043] transition-colors md3-state-layer hover:bg-[#C4D7F6]"
+                          aria-label="Customize panels"
+                        >
+                          <span className="material-symbols-outlined text-[24px]">edit</span>
+                        </button>
+                      </div>
+                    )}
+                  />
+                  <MetricsFilterSheet
+                    key={emailMetricContext ?? 'global-email-performance'}
+                    open={emailMetricsOpen}
+                    onClose={() => {
+                      setEmailMetricsOpen(false);
+                      setEmailMetricContext(null);
+                    }}
+                    selectedMetrics={emailSheetSelectedMetrics}
+                    onApplyMetrics={applyEmailSheetMetrics}
+                    filters={emailFilters}
+                    onApplyFilters={setEmailFilters}
+                    options={emailOptions}
+                    metricCatalog={emailMetricCatalog}
+                    enabledMetrics={emailSheetEnabledMetrics}
+                    highlightedMetrics={emailMetricContext ? emailSheetSelectedMetrics : undefined}
+                    highlightLabel={emailMetricContext ? `Active for ${EMAIL_PANEL_TITLES[emailMetricContext]}` : 'Active in Email Performance'}
+                    disabledResources={['campaigns']}
+                    initialTab="metrics"
+                    tabUnderlineLayoutId="email-perf-sheet-underline"
+                  />
+                  <PanelCustomizeSheet
+                    open={emailCustomizeOpen}
+                    onClose={() => {
+                      setEmailCustomizeOpen(false);
+                    }}
+                    title="Customize Email Performance panels"
+                    subtitle="Hide panels from this view or add them back later. They keep using the selected date range and filters."
+                    items={emailPanelOutlineItems}
+                    onShow={showEmailPanel}
+                    onHide={hideEmailPanel}
+                  />
                 </motion.div>
               );
             })()}
 
             {/* CONDITIONAL SECTIONS: Support History */}
             {activeSection === 'Support History' && (
-              <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-6">
+              <motion.div {...md3Enter} transition={{ duration: 0.36, ease: md3Ease }} className="flex flex-col gap-6">
                 <SupportHistoryView currentTicket={currentTicket} allCases={ticketsList} onDrill={drillToTicket} />
               </motion.div>
             )}
 
             {/* CONDITIONAL SECTIONS: Workspace — panels go here, each with data-gem-panel + data-gem-panel-label */}
             {activeSection === 'Workspace' && (
-              <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-2 -mt-3">
-                <WorkspacePanels ticket={currentTicket} onJumpSection={onSectionChange} />
+              <motion.div {...md3Enter} transition={{ duration: 0.36, ease: md3Ease }} className="flex flex-col gap-2 -mt-3">
+                <WorkspacePanels ticket={currentTicket} onJumpSection={onSectionChange} onJumpPanel={jumpFromWorkspace} />
               </motion.div>
             )}
 
             {/* CONDITIONAL SECTIONS: User Guide Reference inside active ticket */}
             {activeSection === 'User Guide' && (
-              <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-6 w-full">
+              <motion.div {...md3Enter} transition={{ duration: 0.36, ease: md3Ease }} className="flex flex-col gap-6 w-full">
                 <div className="bg-surface-container-lowest dark:bg-inverse-surface/40 rounded-xl shadow-none border border-outline-variant/15 p-1 md:p-4">
                   <UserGuideCenter 
                     selectedFile={selectedGuideFile} 
@@ -1027,6 +1533,31 @@ export default function Investigation({
                 </div>
               </motion.div>
             )}
+
+            <AnimatePresence>
+              {workspaceReviewBack && activeSection !== 'Workspace' && (
+                <motion.div
+                  initial={{ opacity: 0, y: 16 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 16 }}
+                  transition={{ type: 'spring', stiffness: 400, damping: 32 }}
+                  className="pointer-events-none fixed bottom-6 left-6 z-50 md:left-[116px]"
+                >
+                  <button
+                    onClick={() => {
+                      setPendingWorkspaceJump(null);
+                      onSectionChange('Workspace');
+                    }}
+                    className="pointer-events-auto flex items-center gap-2 rounded-full border border-outline-variant/20 bg-white py-2.5 pr-5 pl-4 text-sm font-bold text-on-surface shadow-2xl transition-all select-none hover:bg-[#E8F0FE] hover:text-[#1A73E8] dark:border-outline-variant/15 dark:bg-[#1E1D22] dark:text-inverse-on-surface dark:hover:bg-[#1A73E8]/20 dark:hover:text-[#74BBFF]"
+                    aria-label="Back to Workspace"
+                    title={`Back to Workspace from ${workspaceReviewBack.section}`}
+                  >
+                    <span className="material-symbols-outlined text-[18px]">arrow_back</span>
+                    Back
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             </div>
             </motion.div>
@@ -1111,15 +1642,38 @@ function SupportHistoryView({ currentTicket, allCases, onDrill }: { currentTicke
       </div>
 
       {/* Stacked subsections — each an anchor target for the jumplinks */}
-      <section ref={threadRef} data-key="thread" className="scroll-mt-[78px]">
-        <CaseThreadPanel caseId={currentTicket.case_number} accountName={currentTicket.account_name} caseNumber={currentTicket.case_number} />
-      </section>
-      <section ref={timelineRef} data-key="timeline" className="scroll-mt-[78px]">
+      <motion.section
+        ref={threadRef}
+        data-key="thread"
+        className="scroll-mt-[78px]"
+        {...md3Enter}
+        transition={{ duration: 0.34, ease: md3Ease, delay: 0.04 }}
+      >
+        <CaseThreadPanel
+          caseId={currentTicket.case_number}
+          accountName={currentTicket.account_name}
+          caseNumber={currentTicket.case_number}
+          messages={currentTicket.case_thread}
+        />
+      </motion.section>
+      <motion.section
+        ref={timelineRef}
+        data-key="timeline"
+        className="scroll-mt-[78px]"
+        {...md3Enter}
+        transition={{ duration: 0.34, ease: md3Ease, delay: 0.08 }}
+      >
         <SupportHistorySection currentTicket={currentTicket} allCases={allCases} view="timeline" onDrill={onDrill} />
-      </section>
-      <section ref={relevantRef} data-key="relevant" className="scroll-mt-[78px]">
+      </motion.section>
+      <motion.section
+        ref={relevantRef}
+        data-key="relevant"
+        className="scroll-mt-[78px]"
+        {...md3Enter}
+        transition={{ duration: 0.34, ease: md3Ease, delay: 0.12 }}
+      >
         <SupportHistorySection currentTicket={currentTicket} allCases={allCases} view="relevant" onDrill={onDrill} />
-      </section>
+      </motion.section>
     </div>
   );
 }

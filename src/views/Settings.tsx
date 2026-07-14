@@ -455,7 +455,11 @@ function GeminiAPIRow() {
         body: JSON.stringify({ model: modelId }),
       });
       const d = await r.json();
-      if (d.active) setActiveModel(d.active);
+      if (d.active) {
+        setActiveModel(d.active);
+        const label = GEMINI_TEXT_MODELS.find(item => item.id === d.active)?.label || d.active;
+        window.dispatchEvent(new CustomEvent('edq-gemini-model-change', { detail: { active: d.active, label } }));
+      }
     } catch {}
     setModelSaving(false);
   };
@@ -544,7 +548,7 @@ function GeminiAPIRow() {
                     className={cn(
                       'w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left transition-colors',
                       m.id === activeModel
-                        ? 'bg-[#1A73E8]/8 dark:bg-[#1A73E8]/15 text-[#1A73E8] dark:text-[#D2E3FC]'
+                        ? 'bg-[#F1F3F4] dark:bg-white/10 text-on-surface dark:text-inverse-on-surface'
                         : 'hover:bg-surface-variant/40 dark:hover:bg-white/5 text-on-surface dark:text-inverse-on-surface'
                     )}
                   >
@@ -553,7 +557,7 @@ function GeminiAPIRow() {
                       {m.note && <p className="text-[11px] text-on-surface-variant dark:text-inverse-on-surface/50 mt-0.5">{m.note}</p>}
                     </div>
                     {m.id === activeModel && (
-                      <span className="material-symbols-outlined text-[18px] shrink-0" style={{ fontVariationSettings: "'FILL' 1" }}>
+                      <span className="material-symbols-outlined text-[18px] shrink-0 text-on-surface-variant dark:text-inverse-on-surface/60" style={{ fontVariationSettings: "'FILL' 1" }}>
                         check_circle
                       </span>
                     )}

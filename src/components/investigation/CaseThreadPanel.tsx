@@ -4,10 +4,50 @@
 // the body. Customer emails and internal comments stay visually distinct. The first
 // (most recent context) entry is expanded by default.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { cn } from '../../App';
 import { useCaseThread } from '../../hooks/useCaseThread';
 import type { CaseThreadEntry } from '../../models/looker';
+import type { CaseThreadMessage } from '../../services/caseDataset';
+
+function canonicalThreadEntries(caseId: string | null | undefined, messages: CaseThreadMessage[] = []): CaseThreadEntry[] {
+  return messages.map(message => {
+    const isEmail = message.comm_type === 'email';
+    const direction = message.direction === 'inbound' || message.direction === 'outbound'
+      ? message.direction
+      : 'unknown';
+
+    if (isEmail) {
+      return {
+        id: message.message_id,
+        case_id: caseId ?? '',
+        communication_type: 'Email',
+        communication_at: message.timestamp,
+        created_by_id: null,
+        direction,
+        from_address: message.sender_name,
+        to_address: message.recipient_name,
+        subject: message.subject,
+        text_body_cleaned: message.message,
+        text_body: message.message,
+        has_attachment: false,
+      };
+    }
+
+    return {
+      id: message.message_id,
+      case_id: caseId ?? '',
+      communication_type: 'Case Comment',
+      communication_at: message.timestamp,
+      created_by_id: null,
+      created_by_name: message.sender_name,
+      created_by_role: message.sender_type === 'owner' ? 'Deliverability Consultant' : 'Customer Contact',
+      created_by_team: message.channel_scope === 'internal' ? 'Case team' : 'Customer team',
+      comment_body: message.message,
+      is_published: message.visibility === 'external',
+    };
+  });
+}
 
 function fmtTime(iso: string | null): string {
   if (!iso) return '—';
@@ -80,36 +120,45 @@ export default function CaseThreadPanel({
   caseId,
   accountName,
   caseNumber,
+  messages,
 }: {
   caseId: string | null | undefined;
   accountName?: string | null;
   caseNumber?: string | null;
+  messages?: CaseThreadMessage[];
 }) {
   const { status, entries, emailCount, commentCount, error } = useCaseThread(caseId);
+  const canonicalEntries = useMemo(() => canonicalThreadEntries(caseId, messages), [caseId, messages]);
+  // The active case dataset is canonical for the demo. Legacy Looker fixtures are
+  // retained only as a fallback for a case that has no embedded thread data.
+  const displayEntries = canonicalEntries.length > 0 ? canonicalEntries : entries;
+  const displayStatus = displayEntries.length > 0 ? 'available' : status;
+  const displayEmailCount = displayEntries.filter(entry => entry.communication_type === 'Email').length;
+  const displayCommentCount = displayEntries.filter(entry => entry.communication_type === 'Case Comment').length;
   const [openId, setOpenId] = useState<string | null>(null);
-  useEffect(() => { setOpenId(entries[0]?.id ?? null); }, [entries]);
+  useEffect(() => { setOpenId(displayEntries[0]?.id ?? null); }, [displayEntries]);
 
   return (
     <div
       data-gem-panel
       data-gem-panel-label="Case Thread (Support History)"
-      data-gem-panel-content={`Account: ${accountName} | Case: ${caseNumber ?? caseId} | ${emailCount} emails, ${commentCount} internal comments`}
+      data-gem-panel-content={`Account: ${accountName} | Case: ${caseNumber ?? caseId} | ${displayEmailCount || emailCount} emails, ${displayCommentCount || commentCount} internal comments`}
       className="flex flex-col gap-3"
     >
-      {status === 'loading' ? (
+      {displayStatus === 'loading' ? (
         <div className="flex items-center gap-2 text-[13px] text-outline px-1 py-2">
           <span className="material-symbols-outlined text-[18px] animate-spin">progress_activity</span> Loading case thread…
         </div>
-      ) : status === 'unavailable' ? (
+      ) : displayStatus === 'unavailable' ? (
         <div className="flex items-center gap-2 text-[13px] text-outline px-1 py-2">
           <span className="material-symbols-outlined text-[18px]">cloud_off</span> {error ?? 'Communication sources unavailable.'}
         </div>
-      ) : entries.length === 0 ? (
+      ) : displayEntries.length === 0 ? (
         <div className="flex items-center gap-2 text-[13px] text-outline px-1 py-2">
           <span className="material-symbols-outlined text-[18px]">forum</span> No communications for this case yet.
         </div>
       ) : (
-        entries.map((entry, i) => (
+        displayEntries.map((entry, i) => (
           <ThreadCard key={entry.id} e={entry} defaultOpen={openId ? entry.id === openId : i === 0} />
         ))
       )}

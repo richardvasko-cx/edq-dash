@@ -1,4 +1,3 @@
-import { registerMailProviderStatusRoute } from './server_mail_provider_status';
 import "dotenv/config";
 import express from "express";
 import path from "path";
@@ -90,27 +89,7 @@ type AppAction = {
   view: 'glance' | 'investigation' | 'tools' | 'user_guide' | 'settings';
   toolsTab?: 'dig' | 'mx' | 'analyzer' | 'ip_warming';
   ticketSection?: 'Overview' | 'Authentication' | 'Deliverability' | 'Email Performance' | 'Support History' | 'Workspace';
-  panelLabel?: string;
-  toolPrefill?: 'sending_domain' | 'sending_ip';
 };
-
-function panelTargetFor(section: NonNullable<AppAction['ticketSection']>, text: string) {
-  if (section === 'Email Performance') {
-    if (/complaint|spam/.test(text)) return 'Recipient response over time';
-    if (/click|open|engagement/.test(text)) return 'Email performance over time';
-    if (/placement|inbox/.test(text)) return 'Placement summary';
-    return 'Performance assessment';
-  }
-  if (section === 'Deliverability') {
-    if (/ip pool|sending ip|reputation|shared pool/.test(text)) return 'Volume per IP pool & IP address';
-    if (/defer|throttl|rate limit/.test(text)) return 'Deferrals by ISP and Reason';
-    if (/bounce|block|550|421/.test(text)) return 'Bounce Class by ISP and Reason';
-    return 'Event types over time';
-  }
-  if (section === 'Authentication') return 'Authentication Scan';
-  if (section === 'Support History') return 'Support History';
-  return undefined;
-}
 
 function resolveAppActions(prompt: string, answer = ''): AppAction[] {
   const promptText = prompt.toLowerCase();
@@ -126,10 +105,10 @@ function resolveAppActions(prompt: string, answer = ''): AppAction[] {
   const apiSettingsContext = /\b(gemini api|api key|model selection|model picker|theme toggle|localstorage|disabled in settings|enable it to chat|app settings)\b/.test(text);
 
   if (/\b(ip warming planner|warming planner|ip warming|warm[-\s]?up|ramp[-\s]?up|volume projection|daily schedule)\b/.test(text)) {
-    add({ id: 'open-ip-warming', label: 'IP Warming Planner', description: 'Build or review the volume ramp plan.', icon: 'thermostat', view: 'tools', toolsTab: 'ip_warming', toolPrefill: 'sending_ip' });
+    add({ id: 'open-ip-warming', label: 'IP Warming Planner', description: 'Build or review the volume ramp plan.', icon: 'thermostat', view: 'tools', toolsTab: 'ip_warming' });
   }
   if (/\b(google dig|dns lookup|spf|dkim|dmarc|txt record|dns record)\b/.test(text)) {
-    add({ id: 'open-google-dig', label: 'Google Dig', description: 'Check DNS records for a sending domain.', icon: 'dns', view: 'tools', toolsTab: 'dig', toolPrefill: /\b(ip|pool|reputation|block|throttl)\b/.test(text) ? 'sending_ip' : 'sending_domain' });
+    add({ id: 'open-google-dig', label: 'Google Dig', description: 'Check DNS records for a sending domain.', icon: 'dns', view: 'tools', toolsTab: 'dig' });
   }
   if (/\b(mx tool|mx record|mail exchanger|mail routing)\b/.test(text)) {
     add({ id: 'open-mx-tool', label: 'MX Tool', description: 'Inspect MX records and routing.', icon: 'mail', view: 'tools', toolsTab: 'mx' });
@@ -144,11 +123,11 @@ function resolveAppActions(prompt: string, answer = ''): AppAction[] {
   if (/\b(authentication|spf|dkim|dmarc|dns alignment)\b/.test(text)) {
     add({ id: 'open-ticket-authentication', label: 'Authentication', description: 'Review SPF, DKIM, DMARC, rDNS, and alignment.', icon: 'shield', view: 'investigation', ticketSection: 'Authentication' });
   }
-  if (/\b(deliverability|bounce class|deferrals by isp|delivery funnel|hardbounces|softbounces)\b/.test(text)) {
-    add({ id: 'open-ticket-deliverability', label: 'Deliverability', description: 'Review delivery, bounce, deferral, and ISP diagnostics.', icon: 'mark_email_unread', view: 'investigation', ticketSection: 'Deliverability', panelLabel: panelTargetFor('Deliverability', text) });
+  if (/\b(deliverability tab|deliverability section|deliverability over time|bounce class|deferrals by isp|delivery funnel|hardbounces|softbounces)\b/.test(text)) {
+    add({ id: 'open-ticket-deliverability', label: 'Deliverability', description: 'Review delivery, bounce, deferral, and ISP diagnostics.', icon: 'mark_email_unread', view: 'investigation', ticketSection: 'Deliverability' });
   }
   if (/\b(email performance|engagement|opens|clicks|open rate|click rate|unsubscribe)\b/.test(text)) {
-    add({ id: 'open-ticket-email-performance', label: 'Email Performance', description: 'Review engagement and performance metrics.', icon: 'equalizer', view: 'investigation', ticketSection: 'Email Performance', panelLabel: panelTargetFor('Email Performance', text) });
+    add({ id: 'open-ticket-email-performance', label: 'Email Performance', description: 'Review engagement and performance metrics.', icon: 'equalizer', view: 'investigation', ticketSection: 'Email Performance' });
   }
   if (/\b(support history|case thread|historical ticket|previous ticket|timeline)\b/.test(text)) {
     add({ id: 'open-ticket-support-history', label: 'Support History', description: 'Review prior cases and account history.', icon: 'history', view: 'investigation', ticketSection: 'Support History' });
@@ -325,8 +304,6 @@ interface ServerTrendRow {
   blocked: number;
   dropped: number;
   complaints: number;
-  opens: number;
-  clicks: number;
 }
 
 function buildTrendRowsForServer(ticket: CaseRecord): ServerTrendRow[] {
@@ -377,12 +354,6 @@ function buildTrendRowsForServer(ticket: CaseRecord): ServerTrendRow[] {
     const seed37 = [...ticket.case_number].reduce((sum, char) => sum + char.charCodeAt(0), 0) + 37;
     const complaints = Math.max(0, Math.round((m.count_spam_complaint / 30) * (0.5 + Math.abs(Math.sin((seed37 + index * 17) * 1.271)) * 0.75)));
 
-    const seed41 = [...ticket.case_number].reduce((sum, char) => sum + char.charCodeAt(0), 0) + 41;
-    const opens = Math.max(0, Math.round((m.count_nonprefetched_unique_confirmed_opened / 30) * (0.72 + Math.abs(Math.sin((seed41 + index * 17) * 1.271)) * 0.64)));
-
-    const seed43 = [...ticket.case_number].reduce((sum, char) => sum + char.charCodeAt(0), 0) + 43;
-    const clicks = Math.max(0, Math.round((m.count_unique_clicked / 30) * (0.68 + Math.abs(Math.sin((seed43 + index * 17) * 1.271)) * 0.7)));
-
     rows.push({
       date: date.toISOString().slice(0, 10),
       targeted,
@@ -398,16 +369,17 @@ function buildTrendRowsForServer(ticket: CaseRecord): ServerTrendRow[] {
       blocked,
       dropped,
       complaints,
-      opens,
-      clicks,
     });
   }
   return rows;
 }
 
-function getScaledDailySeriesForTicket(ticket: CaseRecord): ServerTrendRow[] {
+function getDailySeriesContext(caseNumber: string): string {
+  const ticket = cases.find(c => c.case_number === caseNumber);
+  if (!ticket) return '';
+
   const series = buildTrendRowsForServer(ticket);
-  if (!series.length) return [];
+  if (!series.length) return '';
 
   // Sum the simulated values
   let sumDeferred = 0;
@@ -450,31 +422,19 @@ function getScaledDailySeriesForTicket(ticket: CaseRecord): ServerTrendRow[] {
     }
     series[maxIdx].bounce = Math.max(0, series[maxIdx].bounce + diffBnc);
   }
-  return series;
-}
-
-function getDailySeriesContext(caseNumber: string): string {
-  const ticket = cases.find(c => c.case_number === caseNumber);
-  if (!ticket) return '';
-
-  const series = getScaledDailySeriesForTicket(ticket);
-  if (!series.length) return '';
 
   const lines: string[] = [];
   lines.push("=== 30-DAY DAILY HISTORICAL METRICS ===");
-  lines.push("Date | Targeted | Sent | Accepted | Accepted % | Bounces | Bounce % | Deferred | Delayed % | Opens | Open % | Clicks | Click % | Complaints | Complaint %");
-  lines.push("---|---|---|---|---|---|---|---|---|---|---|---|---|---|---");
+  lines.push("Date | Targeted | Sent | Accepted | Accepted % | Bounces | Bounce % | Deferred | Delayed %");
+  lines.push("---|---|---|---|---|---|---|---|---");
   for (const pt of series) {
     const d = new Date(pt.date);
     const dateStr = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
     const accPct = (pt.sent > 0 ? (pt.accepted / pt.sent * 100) : 0).toFixed(1) + '%';
     const bncPct = (pt.sent > 0 ? (pt.bounce / pt.sent * 100) : 0).toFixed(1) + '%';
     const delPct = (pt.accepted > 0 ? (pt.delay / pt.accepted * 100) : 0).toFixed(1) + '%';
-    const openPct = (pt.accepted > 0 ? (pt.opens / pt.accepted * 100) : 0).toFixed(1) + '%';
-    const clickPct = (pt.accepted > 0 ? (pt.clicks / pt.accepted * 100) : 0).toFixed(1) + '%';
-    const complaintPct = (pt.accepted > 0 ? (pt.complaints / pt.accepted * 100) : 0).toFixed(2) + '%';
 
-    lines.push(`${dateStr} | ${pt.targeted.toLocaleString('en-GB')} | ${pt.sent.toLocaleString('en-GB')} | ${pt.accepted.toLocaleString('en-GB')} | ${accPct} | ${pt.bounce.toLocaleString('en-GB')} | ${bncPct} | ${pt.deferred.toLocaleString('en-GB')} | ${delPct} | ${pt.opens.toLocaleString('en-GB')} | ${openPct} | ${pt.clicks.toLocaleString('en-GB')} | ${clickPct} | ${pt.complaints.toLocaleString('en-GB')} | ${complaintPct}`);
+    lines.push(`${dateStr} | ${pt.targeted.toLocaleString('en-GB')} | ${pt.sent.toLocaleString('en-GB')} | ${pt.accepted.toLocaleString('en-GB')} | ${accPct} | ${pt.bounce.toLocaleString('en-GB')} | ${bncPct} | ${pt.deferred.toLocaleString('en-GB')} | ${delPct}`);
   }
   return lines.join('\n');
 }
@@ -711,206 +671,10 @@ function extractMarkdownTableLabels(markdown: string): string[] {
   return labels;
 }
 
-const EXPLICIT_CHART_RE = /\b(chart|graph|plot|visuali[sz]e|trend line|bar chart|pie chart)\b/i;
-const TREND_CHART_RE = /\b(30[-\s]?day|trend|over time|time[-\s]?series|daily|day[-\s]?by[-\s]?day|trajectory|progression|spike|increase|decrease|degradation|improv(e|ement)|inflection)\b/i;
-const COMPARISON_CHART_RE = /\b(compare|comparison|versus|vs\.?|breakdown|ranking|rank|top|share|distribution|composition|by provider|by domain|by isp|by campaign|by subaccount)\b/i;
-const METRIC_CONTEXT_RE = /\b(metric|rate|count|accepted|delivery|delivered|deferred|delayed|bounce|block|complaint|spam|open|click|unsubscribe|inbox|sent|targeted|volume|throughput|performance)\b/i;
-
-function chartMetricTokens(text: string): Set<string> {
-  const lower = String(text || '').toLowerCase();
-  const tokens = new Set<string>();
-  const add = (...items: string[]) => items.forEach(item => tokens.add(item));
-  if (/\b(accepted|acceptance|delivery|delivered|deliverability)\b/.test(lower)) add('accepted', 'delivery', 'delivered');
-  if (/\b(bounce|bounces|bounced|block|blocked|550|421|deferral|defer|deferred|delay|delayed|throttle|throttling)\b/.test(lower)) add('bounce', 'bounces', 'block', 'blocked', 'deferred', 'delay', 'delayed');
-  if (/\b(open|opens|opened|render|rendered)\b/.test(lower)) add('open', 'opens', 'opened', 'rendered');
-  if (/\b(click|clicks|clicked|ctr)\b/.test(lower)) add('click', 'clicks', 'clicked');
-  if (/\b(complaint|complaints|spam complaint|spam rate|spam)\b/.test(lower)) add('complaint', 'complaints', 'spam');
-  if (/\b(unsubscribe|unsubscribes|unsub)\b/.test(lower)) add('unsubscribe');
-  if (/\b(inbox|inbox placement|placement)\b/.test(lower)) add('inbox', 'placement');
-  if (/\b(sent|send|targeted|volume|traffic|throughput)\b/.test(lower)) add('sent', 'targeted', 'volume');
-  return tokens;
-}
-
-function textMentionsAnyMetric(text: string, tokens: Set<string>): boolean {
-  if (!tokens.size) return true;
-  const lower = String(text || '').toLowerCase();
-  return Array.from(tokens).some(token => lower.includes(token));
-}
-
-type ChartSubject = 'authentication' | 'deliverability' | 'emailPerformance' | 'supportHistory' | 'workspace' | 'generic';
-
-function chartSubjectFor(prompt = '', screenText = '', selectedPanelBlock = ''): ChartSubject {
-  const focusedText = `${prompt}\n${selectedPanelBlock}`.toLowerCase();
-  const fallbackText = String(screenText || '').toLowerCase();
-  const weightedScore = (patterns: RegExp[]) => {
-    const focused = patterns.reduce((sum, pattern) => sum + (pattern.test(focusedText) ? 3 : 0), 0);
-    const fallback = patterns.reduce((sum, pattern) => sum + (pattern.test(fallbackText) ? 1 : 0), 0);
-    return focused + fallback;
-  };
-  const scores: Record<ChartSubject, number> = {
-    authentication: weightedScore([/\b(authentication|spf|dkim|dmarc|dns|return-path|rdns)\b/]),
-    emailPerformance: weightedScore([/\b(email performance|engagement|open rate|opens|click|clicked|spam complaint|unsubscribe|inbox placement)\b/]),
-    deliverability: weightedScore([/\b(deliverability|bounce|bounces|defer|deferred|delayed|accepted|delivery rate|mailbox provider|sender reputation|blocked)\b/]),
-    supportHistory: weightedScore([/\b(support history|past cases|precedent|case thread)\b/]),
-    workspace: weightedScore([/\b(final ticket response|recommended actions|next steps|handoff)\b/]),
-    generic: 0,
-  };
-  const ordered: ChartSubject[] = ['emailPerformance', 'deliverability', 'authentication', 'supportHistory', 'workspace'];
-  return ordered.reduce<ChartSubject>((best, subject) => {
-    if (scores[subject] > scores[best]) return subject;
-    return best;
-  }, 'generic');
-}
-
-function chartMetricTokensForContext(prompt: string, screenText = '', selectedPanelBlock = ''): Set<string> {
-  const subject = chartSubjectFor(prompt, screenText, selectedPanelBlock);
-  const fromPrompt = chartMetricTokens(prompt);
-  const tokens = new Set<string>();
-  const add = (...items: string[]) => items.forEach(item => tokens.add(item));
-
-  if (subject === 'authentication') return tokens;
-  if (subject === 'emailPerformance') {
-    add('open', 'opens', 'opened', 'rendered', 'click', 'clicks', 'clicked', 'complaint', 'complaints', 'spam', 'unsubscribe', 'inbox', 'placement');
-    if (fromPrompt.size) return new Set(Array.from(tokens).filter(token => fromPrompt.has(token) || !/\b(bounce|deferred|accepted|delivery|sent|targeted|volume)\b/.test(token)));
-    return tokens;
-  }
-  if (subject === 'deliverability') {
-    add('accepted', 'delivery', 'delivered', 'bounce', 'bounces', 'block', 'blocked', 'deferred', 'delay', 'delayed', 'sent', 'targeted', 'volume', 'complaint', 'complaints', 'spam');
-    return tokens;
-  }
-  if (fromPrompt.size) return fromPrompt;
-  return chartMetricTokens(`${screenText}\n${selectedPanelBlock}`);
-}
-
-function chartMetricAllowedForSubject(chartMetricText: string, prompt: string, screenText = '', selectedPanelBlock = ''): boolean {
-  const subject = chartSubjectFor(prompt, screenText, selectedPanelBlock);
-  const lower = chartMetricText.toLowerCase();
-  if (subject === 'authentication' || subject === 'supportHistory' || subject === 'workspace') return false;
-  if (subject === 'emailPerformance') {
-    return /\b(open|opened|render|rendered|click|clicked|complaint|spam|unsubscribe|inbox|placement|engagement)\b/.test(lower)
-      && !/\b(bounce|bounces|defer|deferred|delay|delayed|accepted|delivery|delivered|sent|targeted)\b/.test(lower);
-  }
-  return true;
-}
-
-function isNonChartWorkspacePanelPrompt(prompt = ''): boolean {
-  return /\b(Restate the customer's reported issue|Determine the single most likely ROOT CAUSE|Evaluate authentication for THIS case|Issue context for matching|Produce the internal action plan|Write the final deliverability HANDOFF NOTE)\b/i.test(prompt);
-}
-
-type ExistingChartOption = {
-  id: string;
-  label: string;
-  description: string;
-  metricKeys: string[];
-  config: any;
-};
-
-function sampledDailyRows(ticket: CaseRecord) {
-  const series = getScaledDailySeriesForTicket(ticket);
-  const stride = Math.max(1, Math.floor(series.length / 10));
-  return series
-    .filter((_, index) => index % stride === 0 || index === series.length - 1)
-    .slice(-12)
-    .map(pt => {
-      const d = new Date(pt.date);
-      const day = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-      return {
-        day,
-        accepted: pt.accepted,
-        sent: pt.sent,
-        targeted: pt.targeted,
-        bounces: pt.bounce,
-        deferred: pt.deferred,
-        opens: pt.opens,
-        clicks: pt.clicks,
-        complaints: pt.complaints,
-        accepted_rate: pt.sent > 0 ? Number(((pt.accepted / pt.sent) * 100).toFixed(1)) : 0,
-        bounce_rate: pt.sent > 0 ? Number(((pt.bounce / pt.sent) * 100).toFixed(1)) : 0,
-        delayed_rate: pt.accepted > 0 ? Number(((pt.delay / pt.accepted) * 100).toFixed(1)) : 0,
-        open_rate: pt.accepted > 0 ? Number(((pt.opens / pt.accepted) * 100).toFixed(1)) : 0,
-        click_rate: pt.accepted > 0 ? Number(((pt.clicks / pt.accepted) * 100).toFixed(1)) : 0,
-        complaint_rate: pt.accepted > 0 ? Number(((pt.complaints / pt.accepted) * 100).toFixed(2)) : 0,
-      };
-    });
-}
-
-function longSeries(rows: Record<string, any>[], metrics: Array<{ key: string; label: string }>) {
-  return rows.flatMap(row => metrics.map(metric => ({
-    x: row.day,
-    series: metric.label,
-    value: Number(row[metric.key] ?? 0),
-  })));
-}
-
-function existingDashboardChartOptions(ticketRef: any, prompt: string, answer = '', screenText = '', selectedPanelBlock = ''): ExistingChartOption[] {
-  const ticket = ticketRef?.id ? cases.find(c => c.case_number === ticketRef.id) : null;
-  if (!ticket) return [];
-  const rows = sampledDailyRows(ticket);
-  if (!rows.length) return [];
-  const subject = chartSubjectFor(prompt, screenText, selectedPanelBlock);
-  if (subject === 'authentication' || subject === 'supportHistory' || subject === 'workspace') return [];
-
-  const metricDefinitions = [
-    { id: 'accepted-rate', key: 'accepted_rate', label: 'Accepted rate', series: 'Accepted %', family: 'deliverability', aliases: /\b(accepted|acceptance|delivery rate|delivered)\b/i },
-    { id: 'bounce-rate', key: 'bounce_rate', label: 'Bounce rate', series: 'Bounce %', family: 'deliverability', aliases: /\b(bounce|bounces|bounced|block|blocked|550|421)\b/i },
-    { id: 'delayed-rate', key: 'delayed_rate', label: 'Delayed rate', series: 'Delayed %', family: 'deliverability', aliases: /\b(delay|delayed|defer|deferred|deferral|throttle|throttling)\b/i },
-    { id: 'sent-volume', key: 'sent', label: 'Sent volume', series: 'Sent', family: 'deliverability', aliases: /\b(sent|send volume|traffic|throughput|volume)\b/i },
-    { id: 'accepted-volume', key: 'accepted', label: 'Accepted volume', series: 'Accepted', family: 'deliverability', aliases: /\b(accepted volume|delivered volume)\b/i },
-    { id: 'deferred-volume', key: 'deferred', label: 'Deferred volume', series: 'Deferred', family: 'deliverability', aliases: /\b(deferred volume|deferral count|deferred count)\b/i },
-    { id: 'open-rate', key: 'open_rate', label: 'Open rate', series: 'Open %', family: 'emailPerformance', aliases: /\b(open rate|opens|opened|engagement)\b/i },
-    { id: 'click-rate', key: 'click_rate', label: 'Click rate', series: 'Click %', family: 'emailPerformance', aliases: /\b(click rate|clicks|clicked|ctr)\b/i },
-    { id: 'complaint-rate', key: 'complaint_rate', label: 'Complaint rate', series: 'Complaint %', family: 'emailPerformance', aliases: /\b(complaint rate|complaints|spam rate|spam complaint)\b/i },
-    { id: 'open-volume', key: 'opens', label: 'Open volume', series: 'Opens', family: 'emailPerformance', aliases: /\b(open volume|open count)\b/i },
-    { id: 'click-volume', key: 'clicks', label: 'Click volume', series: 'Clicks', family: 'emailPerformance', aliases: /\b(click volume|click count)\b/i },
-    { id: 'complaint-volume', key: 'complaints', label: 'Complaint volume', series: 'Complaints', family: 'emailPerformance', aliases: /\b(complaint volume|complaint count)\b/i },
-  ] as const;
-  const focusedText = `${prompt}\n${answer}`;
-  const familyDefinitions = metricDefinitions.filter(metric => subject === 'generic' || metric.family === subject);
-  const explicitlyRelevant = familyDefinitions.filter(metric => metric.aliases.test(focusedText));
-  const definitions = explicitlyRelevant.length ? explicitlyRelevant : familyDefinitions;
-
-  return definitions.map(metric => ({
-    id: `existing-${metric.id}-trend`,
-    label: `${metric.label} trend`,
-    description: `Existing dashboard daily ${metric.label.toLowerCase()} series. Contains only ${metric.series}; use only when that metric is central to the request.`,
-    metricKeys: [metric.id],
-    config: {
-      type: 'chart',
-      allowChart: true,
-      chartType: metric.key.endsWith('_rate') ? 'line' : 'area',
-      title: `${metric.label} trend`,
-      xField: 'x',
-      yField: 'value',
-      seriesField: 'series',
-      data: longSeries(rows, [{ key: metric.key, label: metric.series }]),
-    },
-  }));
-}
-
-function shouldAttemptChart(prompt: string, answer: string, selectedPanelBlock = '', screenText = ''): boolean {
-  const text = `${prompt}\n${answer}`;
-  const promptExplicitlyRequestsChart = EXPLICIT_CHART_RE.test(prompt);
-  if (isNonChartWorkspacePanelPrompt(prompt) && !promptExplicitlyRequestsChart) return false;
-  const subject = chartSubjectFor(prompt, screenText, selectedPanelBlock);
-  if ((subject === 'authentication' || subject === 'supportHistory' || subject === 'workspace') && !promptExplicitlyRequestsChart) return false;
-  if (promptExplicitlyRequestsChart) return true;
-  if (!METRIC_CONTEXT_RE.test(text)) return false;
-  if (TREND_CHART_RE.test(text) || COMPARISON_CHART_RE.test(text)) return true;
-  if (extractMarkdownTableLabels(answer).length >= 2) return true;
-  return false;
-}
-
-function shouldIncludeDailyChartContext(prompt: string, answer: string, screenText = '', selectedPanelBlock = ''): boolean {
-  const subject = chartSubjectFor(prompt, screenText, selectedPanelBlock);
-  if (subject === 'authentication' || subject === 'supportHistory' || subject === 'workspace') return false;
-  const text = `${prompt}\n${answer}`;
-  return EXPLICIT_CHART_RE.test(text) || TREND_CHART_RE.test(text);
-}
-
-function normalizeGeminiChartDecision(decision: any, sourceAnswer = '', prompt = '', screenText = '', selectedPanelBlock = ''): any | null {
+function normalizeGeminiChartDecision(decision: any, sourceAnswer = '', prompt = ''): any | null {
   const chart = decision?.chart;
   if (!decision?.shouldChart || !chart || typeof chart !== 'object') return null;
-  let chartType = ['line', 'area', 'bar', 'pie'].includes(chart.chartType) ? chart.chartType : 'bar';
+  let chartType = ['line', 'bar', 'pie'].includes(chart.chartType) ? chart.chartType : 'bar';
   const data = Array.isArray(chart.data) ? chart.data.slice(0, 12) : [];
   if (!data.length || !chart.xField || !chart.yField) return null;
   if (data.some((row: any) => Number.isNaN(Number(row?.[chart.yField])))) return null;
@@ -923,16 +687,7 @@ function normalizeGeminiChartDecision(decision: any, sourceAnswer = '', prompt =
     || chartLabels.some(label => /\b(\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|\d{4}-\d{2}-\d{2})\b/i.test(label));
   if (wantsTrend && !xFieldLooksTemporal) return null;
   if (wantsTrend) chartType = 'line';
-  const isTimeSeries = chartType === 'line' || chartType === 'area' || xFieldLooksTemporal;
-  const chartMetricText = [
-    chart.title,
-    chart.yField,
-    chart.seriesField,
-    ...data.flatMap((row: any) => Object.keys(row || {})),
-  ].filter(Boolean).join(' ');
-  if (!chartMetricAllowedForSubject(chartMetricText, prompt, screenText, selectedPanelBlock)) return null;
-  const metricTokens = chartMetricTokensForContext(prompt, screenText, selectedPanelBlock);
-  if (!textMentionsAnyMetric(chartMetricText, metricTokens)) return null;
+  const isTimeSeries = chartType === 'line' || xFieldLooksTemporal;
 
   if (!isTimeSeries && tableLabels.length >= 2 && chartLabels.length > 0 && !explicitlyAskedForExpansion) {
     const tableSet = new Set(tableLabels);
@@ -963,13 +718,8 @@ async function appendGeminiDecidedChart(args: {
 }): Promise<string> {
   const { prompt, answer, screenText, selectedPanelBlock = '', sources = [], ticketRef } = args;
   if (!geminiApiKey || !answer.trim()) return answer;
-  if (!shouldAttemptChart(prompt, answer, selectedPanelBlock, screenText)) return answer;
   try {
-    const existingChartOptions = existingDashboardChartOptions(ticketRef, prompt, answer, screenText, selectedPanelBlock);
-    const existingChartMenu = existingChartOptions.length
-      ? existingChartOptions.map(option => `- ${option.id}: ${option.label} — ${option.description}`).join('\n')
-      : '(none available for this context)';
-    const dailyHistoryBlock = ticketRef?.id && shouldIncludeDailyChartContext(prompt, answer, screenText, selectedPanelBlock) ? getDailySeriesContext(ticketRef.id) : '';
+    const dailyHistoryBlock = ticketRef?.id ? getDailySeriesContext(ticketRef.id) : '';
     const raw = await callGemini([
       {
         role: 'system',
@@ -979,11 +729,10 @@ Return ONLY valid JSON with this exact shape:
 {
   "shouldChart": boolean,
   "reason": "short reason",
-  "existingChartId": null | "one of the provided existing chart ids",
   "chart": null | {
     "type": "chart",
     "allowChart": true,
-    "chartType": "line" | "area" | "bar" | "pie",
+    "chartType": "line" | "bar" | "pie",
     "title": "short title",
     "xField": "x",
     "yField": "value",
@@ -995,14 +744,6 @@ Return ONLY valid JSON with this exact shape:
 Decision rules:
 - Create a chart only when a visualization materially improves understanding.
 - Good reasons: the user explicitly asks for a chart/graph/visualization, or the answer analyzes live/pinned dashboard metrics, comparable rates, counts, or trends.
-- Prefer an existing dashboard chart whenever one fits. If an existing chart fits, set "existingChartId" to that id and set "chart": null. The application will render the existing Deliverability or Email Performance chart data and styling.
-- Use custom "chart" JSON only when no existing chart fits but a visualization is still clearly useful.
-- You decide the best chart type and metric(s). Prefer:
-  - "line" for precise over-time trends, rate changes, spikes, degradation, or recovery.
-  - "area" for volume over time where magnitude/throughput matters.
-  - "bar" for ranking, provider/domain/campaign/subaccount comparison, or side-by-side metric comparison.
-  - "pie" only for composition/share of a small number of categories.
-- Use the metric(s) most relevant to the prompt and answer. Available deliverability metrics include targeted, sent, accepted, accepted %, bounces, bounce %, deferred, delayed %, opens, open %, clicks, click %, complaints, complaint %, inbox placement, unsubscribes, and any visible pinned metric. Do not default to bounces unless bounce/blocking is the actual subject.
 - Scope charts to the narrowest active selection in LIVE/PINNED context first: selected IP, sending domain, mailbox provider, IP pool, campaign, or subaccount. Do not chart the whole ticket/account when a narrower selected entity is present.
 - For trend, 30-day, over-time, spike, inflection, degradation, or progression analysis, use chartType "line" and x-axis dates/days from the 30-day historical table. Do not replace a trend request with a category/provider bar chart.
 - For category comparisons such as ISP/provider/domain rankings, use chartType "bar". For composition/share, use "pie".
@@ -1025,9 +766,6 @@ LIVE/PINNED CONTEXT:
 ${(selectedPanelBlock || screenText || '').slice(0, 2500)}
 ${dailyHistoryBlock ? `\n\n${dailyHistoryBlock}` : ''}
 
-EXISTING DASHBOARD CHART OPTIONS:
-${existingChartMenu}
-
 GUIDE SOURCES:
 ${sources.slice(0, 5).join('\n')}
 
@@ -1035,13 +773,7 @@ HAS_TICKET_REF: ${Boolean(ticketRef?.id)}`
       },
     ], 0.1, { maxTokens: 1500, timeoutMs: 60_000 });
     const decision = extractJsonObject(raw);
-    const selectedExistingChart = decision?.shouldChart && decision?.existingChartId
-      ? existingChartOptions.find(option => option.id === decision.existingChartId)
-      : null;
-    if (selectedExistingChart) {
-      return `${answer}\n\n\`\`\`json\n${JSON.stringify(selectedExistingChart.config, null, 2)}\n\`\`\``;
-    }
-    const chart = normalizeGeminiChartDecision(decision, answer, prompt, screenText, selectedPanelBlock);
+    const chart = normalizeGeminiChartDecision(decision, answer, prompt);
     if (!chart) return answer;
     return `${answer}\n\n\`\`\`json\n${JSON.stringify(chart, null, 2)}\n\`\`\``;
   } catch (err) {
@@ -1607,17 +1339,11 @@ async function runAuthenticationScan(ticket: any, options: { force?: boolean } =
 
 async function startServer() {
   const app = express();
-
-  registerMailProviderStatusRoute(app);
   const PORT = parseInt(process.env.PORT || '3000', 10);
 
   app.use(express.json());
 
 
-
-
-
-  // iCloud Mail status for Daily Briefing.
 
   // Refresh (restart) the dev server itself. Under `tsx watch`, bumping this
   // file's mtime triggers a clean process restart; if not watched, exit so an
@@ -2043,13 +1769,6 @@ async function startServer() {
         : '(the user is not focused on a specific record)';
 
       const dailyHistoryBlock = ticketRef?.id ? getDailySeriesContext(ticketRef.id) : '';
-      const currentTicket = ticketRef?.id ? cases.find(item => item.case_number === ticketRef.id) : undefined;
-      const accountInfrastructureBlock = currentTicket ? `
-=== AUTHORITATIVE ACCOUNT INFRASTRUCTURE ===
-Account: ${currentTicket.account_name}
-Assigned IP pools: ${currentTicket.ip_pools.join(', ')}
-Sending IPs: ${currentTicket.sending_ips.join(', ')}
-Campaigns: ${currentTicket.campaigns.join(', ')}` : '';
 
       // Count distinct pinned panels (delimited as "=== PANEL N: ... ===" by the
       // client) so we can tell the model when to assess cross-panel relatedness.
@@ -2092,8 +1811,6 @@ ANSWER THE LITERAL QUESTION FIRST — your opening sentence must directly addres
 
 TICKET CONTEXT RULE — when LIVE ON-SCREEN CONTEXT says "Currently viewing: Support ticket", treat the answer as about that specific account/case unless the user explicitly asks a general question. If ACTIVE FILTERS name a selected IP, sending domain, mailbox provider, IP pool, campaign, or subaccount, scope the diagnosis to that selected entity first and only widen to the ticket/account after. Use the active tab as visual focus, but correlate across the full ticket context: issue, case number, account, root cause, authentication state, deliverability metrics, email performance metrics, bounce/provider details, support history, sending domains, and subaccounts. Do not answer a clicked suggestion as generic best practice if ticket/account data is present.
 
-ACCOUNT INFRASTRUCTURE FIDELITY — The live ticket's "Assigned IP pools", "Sending IPs", and "Campaigns" are authoritative account data. Every account has one or more assigned IP pools. When the user asks which pool is involved, name the listed pool or pools directly and connect them to the case evidence. Never say that an IP pool is unavailable, unidentified, absent, or requires checking elsewhere when "Assigned IP pools" contains a value. Only distinguish an exact pool from a broader shared-pool diagnosis when the data genuinely lists more than one pool.
-
 NEVER CONFUSE 30-DAY TOTALS WITH 7-DAY SNAPSHOTS — When the user asks for a 30-day trend or historical analysis, do NOT use the 7-day visual snapshot metrics (e.g., 9,175 deferred events or 95.3% accepted rate from pinned/screen cards) as the representative 30-day totals. Instead, reference the actual daily values and cumulative totals from the "=== 30-DAY DAILY HISTORICAL METRICS ===" table. If you write a summary table, report the 30-day values (e.g., total 39,321 deferred events or the peak daily count of 18,976) rather than copying the 7-day pinned value, or clearly label them as "7-day active window: 9,175 vs 30-day total: 39,321". Always be precise about the timeframes.
 
 NEVER DISCLAIM MISSING CONTEXT — non-negotiable. You are a deliverability expert; answer from your own expertise. NEVER open with or include phrases like "There is no specific … defined in the provided documentation", "the documentation does not specify", "not defined in the live context", or any variation that frames the answer around the absence of pinned data, guide excerpts, or on-screen context. The user does not see "the documentation" — they see you. When no panel/context/guide is pinned, simply give the expert answer directly as if the question stood alone. Do not mention what you were or weren't given.
@@ -2117,7 +1834,7 @@ The agent pinned ${pinnedPanelCount > 1 ? `${pinnedPanelCount} panels` : 'this m
 ${selectedPanelBlock.slice(0, 2500)}` : ''}
 
 === LIVE ON-SCREEN CONTEXT ===
-${screenBlock}${accountInfrastructureBlock}
+${screenBlock}
 ${dailyHistoryBlock ? `\n\n${dailyHistoryBlock}` : ''}
 
 === BRAZE USER GUIDE EXCERPTS ===
@@ -2241,13 +1958,6 @@ Return ONLY the answer in Markdown. Do not add a "SUGGESTIONS" section or follow
       const screenBlock = baseScreenS ? baseScreenS.slice(0, 2000) : '(the user is not focused on a specific record)';
 
       const dailyHistoryBlockS = ticketRef?.id ? getDailySeriesContext(ticketRef.id) : '';
-      const currentTicketS = ticketRef?.id ? cases.find(item => item.case_number === ticketRef.id) : undefined;
-      const accountInfrastructureBlockS = currentTicketS ? `
-=== AUTHORITATIVE ACCOUNT INFRASTRUCTURE ===
-Account: ${currentTicketS.account_name}
-Assigned IP pools: ${currentTicketS.ip_pools.join(', ')}
-Sending IPs: ${currentTicketS.sending_ips.join(', ')}
-Campaigns: ${currentTicketS.campaigns.join(', ')}` : '';
 
       let highlightedBlock = '';
       if (highlightedText) {
@@ -2296,8 +2006,6 @@ ANSWER THE LITERAL QUESTION FIRST — your opening sentence must directly addres
 
 TICKET CONTEXT RULE — when LIVE ON-SCREEN CONTEXT says "Currently viewing: Support ticket", treat the answer as about that specific account/case unless the user explicitly asks a general question. If ACTIVE FILTERS name a selected IP, sending domain, mailbox provider, IP pool, campaign, or subaccount, scope the diagnosis to that selected entity first and only widen to the ticket/account after. Use the active tab as visual focus, but correlate across the full ticket context: issue, case number, account, root cause, authentication state, deliverability metrics, email performance metrics, bounce/provider details, support history, sending domains, and subaccounts. Do not answer a clicked suggestion as generic best practice if ticket/account data is present.
 
-ACCOUNT INFRASTRUCTURE FIDELITY — The live ticket's "Assigned IP pools", "Sending IPs", and "Campaigns" are authoritative account data. Every account has one or more assigned IP pools. When the user asks which pool is involved, name the listed pool or pools directly and connect them to the case evidence. Never say that an IP pool is unavailable, unidentified, absent, or requires checking elsewhere when "Assigned IP pools" contains a value. Only distinguish an exact pool from a broader shared-pool diagnosis when the data genuinely lists more than one pool.
-
 NEVER CONFUSE 30-DAY TOTALS WITH 7-DAY SNAPSHOTS — When the user asks for a 30-day trend or historical analysis, do NOT use the 7-day visual snapshot metrics (e.g., 9,175 deferred events or 95.3% accepted rate from pinned/screen cards) as the representative 30-day totals. Instead, reference the actual daily values and cumulative totals from the "=== 30-DAY DAILY HISTORICAL METRICS ===" table. If you write a summary table, report the 30-day values (e.g., total 39,321 deferred events or the peak daily count of 18,976) rather than copying the 7-day pinned value, or clearly label them as "7-day active window: 9,175 vs 30-day total: 39,321". Always be precise about the timeframes.
 
 NEVER DISCLAIM MISSING CONTEXT — non-negotiable. You are a deliverability expert; answer from your own expertise. NEVER open with or include phrases like "There is no specific … defined in the provided documentation", "the documentation does not specify", "not defined in the live context", or any variation that frames the answer around the absence of pinned data, guide excerpts, or on-screen context. The user does not see "the documentation" — they see you. When no panel/context/guide is pinned, simply give the expert answer directly as if the question stood alone. Do not mention what you were or weren't given.
@@ -2321,7 +2029,7 @@ The agent pinned ${pinnedPanelCountS > 1 ? `${pinnedPanelCountS} panels` : 'this
 ${selectedPanelBlockS.slice(0, 2500)}` : ''}
 
 === LIVE ON-SCREEN CONTEXT ===
-${screenBlock}${accountInfrastructureBlockS}${highlightedBlock}
+${screenBlock}${highlightedBlock}
 ${dailyHistoryBlockS ? `\n\n${dailyHistoryBlockS}` : ''}
 
 === BRAZE USER GUIDE EXCERPTS ===

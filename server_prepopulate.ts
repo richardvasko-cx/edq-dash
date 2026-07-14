@@ -776,7 +776,8 @@ export function searchAndGetRAGContext(query: string, limit = 4): { context: str
 
   // Simple local keyword-based search over the prepopulated (and any other synced) files
   const searchResults: { path: string, content: string, score: number }[] = [];
-  const queryTerms = query.toLowerCase().split(/\s+/).filter(t => t.length > 2);
+  const stopTerms = new Set(['about', 'article', 'braze', 'create', 'current', 'first', 'guide', 'help', 'how', 'this', 'use', 'user', 'with', 'what', 'when', 'where']);
+  const queryTerms = query.toLowerCase().match(/[a-z0-9_]+/g)?.filter(t => t.length > 2 && !stopTerms.has(t)) || [];
 
   function walk(dir: string, baseDir: string) {
     if (!fs.existsSync(dir)) return;
@@ -796,10 +797,12 @@ export function searchAndGetRAGContext(query: string, limit = 4): { context: str
         queryTerms.forEach(term => {
           // Term occurrences weight
           const occurrences = lowerContent.split(term).length - 1;
-          score += occurrences * 10;
+          // A common body word is weak evidence; the document title/path is the
+          // high-signal match. Capping prevents a long unrelated article winning.
+          score += Math.min(occurrences, 3) * 3;
           // Title weight
           if (relativePath.toLowerCase().includes(term)) {
-            score += 100;
+            score += 120;
           }
         });
 

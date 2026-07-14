@@ -133,7 +133,6 @@ body {
   box-sizing: border-box;
 }
 
-#root,
 #root * {
   min-width: 0;
 }
@@ -231,6 +230,19 @@ h1, h2, h3, h4, h5, h6 {
 .custom-scrollbar.is-scrolling {
   scrollbar-color: rgba(128, 128, 128, 0.42) transparent;
   scrollbar-width: thin;
+}
+
+.edq-header-scroll,
+.edq-header-scroll * {
+  scrollbar-color: transparent transparent !important;
+  scrollbar-width: none !important;
+}
+
+.edq-header-scroll::-webkit-scrollbar,
+.edq-header-scroll *::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
 }
 
 /* Bespoke Braze formatting for rendered user guides */
@@ -576,6 +588,32 @@ h1, h2, h3, h4, h5, h6 {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
 }
+.thinking-shimmer {
+  display: inline-block;
+  font-family: "Google Sans", "Google Sans Text", Arial, sans-serif;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: 1.25;
+  background-color: #2f7bf2;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 20%,
+    #ffffff 50%,
+    transparent 80%,
+    transparent 100%
+  );
+  background-repeat: no-repeat;
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: thinking-briefing-sweep 2.6s linear infinite;
+}
+@keyframes thinking-briefing-sweep {
+  0% { background-position: 150% 0; }
+  73.1%, 100% { background-position: -150% 0; }
+}
 /* Cycling status words that rise up from the bottom with a bouncy overshoot */
 .gemini-think-word {
   animation: gemini-think-rise 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) both;
@@ -589,6 +627,7 @@ h1, h2, h3, h4, h5, h6 {
   .gemini-skel { animation-duration: 3.5s; }
   .gemini-twinkle { animation: none; }
   .gemini-think-word { animation: none; }
+  .thinking-shimmer { animation: none; }
 }
 
 /* ── Gemini panel: comet tracing clockwise once on open ── */
@@ -742,6 +781,219 @@ h1, h2, h3, h4, h5, h6 {
   .getstarted-panel:has(.getstarted-cta:hover) .getstarted-glow::after { animation: none; }
 }
 
+/* Workspace Gemini panel: one Google-colour edge only. The colour never
+   fills the card; while Gemini is thinking, the same edge casts a soft glow
+   outside the panel. */
+.workspace-gemini-shell {
+  position: relative;
+  border-radius: 22px;
+  overflow: visible;
+  isolation: isolate;
+  border: 0 !important;
+  background: linear-gradient(135deg, #4285F4, #EA4335, #FBBC05, #34A853) !important;
+}
+
+.workspace-gemini-shell > * {
+  position: relative;
+  z-index: 1;
+}
+
+.workspace-gemini-shell::before,
+.workspace-gemini-shell::after {
+  content: "";
+  position: absolute;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.workspace-gemini-shell::before {
+  /* Opaque inset surface: it covers the gradient everywhere except the 2px
+     perimeter, including all header/footer gaps in the panel. */
+  inset: 2px;
+  border-radius: 20px;
+  background: #ffffff;
+  z-index: 0;
+}
+
+.workspace-gemini-shell::after {
+  inset: -8px;
+  background: linear-gradient(135deg, rgba(66,133,244,0.5), rgba(234,67,53,0.42), rgba(251,188,5,0.42), rgba(52,168,83,0.45));
+  filter: blur(14px) saturate(1.06);
+  opacity: 0;
+  z-index: -1;
+}
+
+.workspace-gemini-shell-thinking {
+  background: conic-gradient(from var(--gem-angle), #4285F4, #EA4335, #FBBC05, #34A853, #4285F4) !important;
+  animation: gemini-loading-sweep 2.8s linear infinite;
+}
+
+.workspace-gemini-shell-thinking::after {
+  background: conic-gradient(from var(--gem-angle), rgba(66,133,244,0.7), rgba(234,67,53,0.55), rgba(251,188,5,0.55), rgba(52,168,83,0.6), rgba(66,133,244,0.7));
+  opacity: 0.22;
+  inset: -10px;
+  filter: blur(16px) saturate(1.08);
+  animation: gemini-loading-sweep 2.8s linear infinite;
+}
+
+/* Keep all Workspace skeleton lines in the same stream cadence. */
+.workspace-stream-skel {
+  animation-duration: 2.3s;
+}
+
+.workspace-gemini-shell-complete::after {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-gemini-shell-thinking,
+  .workspace-gemini-shell-thinking::after {
+    animation: none;
+  }
+}
+
+/* Temporary Gemini border overlay. Use this inside a plain pill/panel when the
+   base element must not inherit gradient background/layout behavior. */
+.gemini-border-glow {
+  --gemini-shell-surface: #ffffff;
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(135deg, #4285F4, #EA4335, #FBBC05, #34A853);
+  opacity: 1;
+  z-index: 0;
+}
+
+.gemini-border-glow::before,
+.gemini-border-glow::after {
+  content: "";
+  position: absolute;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.gemini-border-glow::before {
+  inset: 2px;
+  background: var(--gemini-shell-surface);
+  z-index: 0;
+}
+
+.gemini-border-glow::after {
+  inset: -8px;
+  background: linear-gradient(135deg, rgba(66,133,244,0.5), rgba(234,67,53,0.42), rgba(251,188,5,0.42), rgba(52,168,83,0.45));
+  filter: blur(14px) saturate(1.06);
+  opacity: 0.22;
+  z-index: -1;
+}
+
+.gemini-border-glow-open {
+  animation: gemini-border-glow-open 1.25s ease-out forwards;
+}
+
+/* Side Gemini panel overlay. The panel remains a normal sheet; this child is
+   the only thing that draws the temporary Google border and outer glow. */
+.gemini-side-panel-frame {
+  isolation: isolate;
+}
+
+.gemini-side-panel-frame > * {
+  position: relative;
+  z-index: 1;
+}
+
+.gemini-panel-border-glow {
+  --gemini-shell-surface: #ffffff;
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 0;
+  padding: 2px;
+  background: linear-gradient(135deg, #4285F4 0%, #34A853 32%, #FBBC05 64%, #EA4335 100%);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  box-shadow:
+    -18px 0 34px rgba(234, 67, 53, 0.16),
+    0 -18px 34px rgba(251, 188, 5, 0.14),
+    18px 0 34px rgba(66, 133, 244, 0.17),
+    0 18px 34px rgba(52, 168, 83, 0.15);
+  /* Unlike a box shadow, drop-shadow follows the masked 2px perimeter. This
+     keeps the bloom outside the rounded edge instead of making a square halo. */
+  filter:
+    drop-shadow(-8px 0 11px rgba(234, 67, 53, 0.14))
+    drop-shadow(0 -8px 11px rgba(251, 188, 5, 0.12))
+    drop-shadow(8px 0 11px rgba(66, 133, 244, 0.15))
+    drop-shadow(0 8px 11px rgba(52, 168, 83, 0.13));
+}
+
+.gemini-panel-border-glow-open {
+  animation: gemini-panel-border-glow-open 1.05s ease-out forwards;
+}
+
+.gemini-panel-border-glow-thinking {
+  opacity: 1;
+  background: conic-gradient(from var(--gem-angle), #4285F4, #EA4335, #FBBC05, #34A853, #4285F4);
+  animation: gemini-loading-sweep 2.8s linear infinite;
+}
+
+/* Preserve the last generated-state perimeter long enough for completion to
+   read as a soft settle rather than an abrupt border disappearance. */
+.gemini-panel-border-glow-fade {
+  opacity: 1;
+  background: conic-gradient(from var(--gem-angle), #4285F4, #EA4335, #FBBC05, #34A853, #4285F4);
+  animation: gemini-panel-border-glow-fade 620ms ease-out forwards;
+}
+
+.gemini-border-glow-thinking {
+  background: conic-gradient(from var(--gem-angle), #4285F4, #EA4335, #FBBC05, #34A853, #4285F4);
+  animation: gemini-loading-sweep 2.8s linear infinite;
+}
+
+.gemini-border-glow-thinking::after {
+  inset: -10px;
+  background: conic-gradient(from var(--gem-angle), rgba(66,133,244,0.7), rgba(234,67,53,0.55), rgba(251,188,5,0.55), rgba(52,168,83,0.6), rgba(66,133,244,0.7));
+  filter: blur(16px) saturate(1.08);
+  animation: gemini-loading-sweep 2.8s linear infinite;
+}
+
+@keyframes gemini-border-glow-open {
+  0% { opacity: 0; transform: scale(0.995); }
+  14% { opacity: 1; }
+  72% { opacity: 0.72; }
+  100% { opacity: 0; transform: scale(1.01); }
+}
+
+@keyframes gemini-panel-border-glow-open {
+  0% { opacity: 0; transform: scale(0.995); }
+  14% { opacity: 1; }
+  68% { opacity: 0.62; }
+  100% { opacity: 0; transform: scale(1.004); }
+}
+
+@keyframes gemini-panel-border-glow-fade {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gemini-panel-border-glow-open,
+  .gemini-panel-border-glow-thinking,
+  .gemini-panel-border-glow-fade,
+  .gemini-border-glow-open,
+  .gemini-border-glow-thinking,
+  .gemini-border-glow-thinking::after {
+    animation: none;
+  }
+}
+
 .ai-prose .app-action-inline-chip,
 .prose-custom .app-action-inline-chip,
 button.app-action-inline-chip {
@@ -770,6 +1022,206 @@ button.app-action-inline-chip {
 button.app-action-inline-chip:hover {
   background: #1669D6 !important;
   border-color: #1669D6 !important;
+}
+
+.atglance-root {
+  container-type: inline-size;
+  container-name: atglance;
+}
+
+.atglance-shell {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+}
+
+.atglance-daily-brief {
+  order: -1;
+  min-width: 0;
+}
+
+#root .atglance-daily-brief :where(div, span, h1, h2) {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+#root .atglance-daily-brief h1 {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.dashboard-kpi-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.atglance-split,
+.atglance-demand-grid,
+.atglance-review-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@container atglance (min-width: 560px) {
+  .dashboard-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Keep the dashboard's full two-column composition while Gemini is open on a
+   13-inch screen. The assistant has its own measured collapse threshold; it
+   must not force Daily Briefing above the dashboard at this intermediate width. */
+@container atglance (min-width: 840px) {
+  .atglance-shell {
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 380px);
+  }
+
+  .atglance-daily-brief {
+    order: 0;
+  }
+
+  .atglance-split {
+    grid-template-columns: minmax(0, 1.35fr) minmax(290px, 0.9fr);
+  }
+
+  .atglance-demand-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .atglance-review-grid {
+    grid-template-columns: minmax(270px, 0.75fr) minmax(0, 1.25fr);
+  }
+
+  .atglance-daily-brief {
+    min-height: 720px;
+    padding: 28px 24px;
+  }
+}
+
+@container atglance (min-width: 1240px) {
+  .dashboard-kpi-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@container atglance (min-width: 1480px) {
+  .atglance-shell {
+    grid-template-columns: minmax(0, 1fr) 440px;
+  }
+
+  .atglance-daily-brief {
+    padding: 32px 28px;
+  }
+}
+
+/* Direct width state from AtAGlance is authoritative when Gemini changes the
+   usable dashboard width. Full = no drawer or a very wide viewport; mid = the
+   Gemini-sharing layout; compact = one-column fallback. */
+.atglance-full-layout .atglance-shell {
+  grid-template-columns: minmax(0, 1fr) 440px;
+}
+
+.atglance-full-layout .atglance-daily-brief {
+  order: 0;
+  min-height: 720px;
+  padding: 32px 28px;
+}
+
+.atglance-full-layout .dashboard-kpi-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.atglance-full-layout .atglance-split {
+  grid-template-columns: minmax(0, 1.35fr) minmax(290px, 0.9fr);
+}
+
+.atglance-full-layout .atglance-demand-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.atglance-full-layout .atglance-review-grid {
+  grid-template-columns: minmax(270px, 0.75fr) minmax(0, 1.25fr);
+}
+
+.atglance-mid-layout .atglance-shell {
+  grid-template-columns: minmax(0, 1fr) 360px;
+}
+
+.atglance-mid-layout .atglance-daily-brief {
+  order: 0;
+  min-height: 720px;
+  padding: 28px 24px;
+}
+
+.atglance-mid-layout .dashboard-kpi-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.atglance-mid-layout .atglance-split,
+.atglance-mid-layout .atglance-demand-grid,
+.atglance-mid-layout .atglance-review-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.atglance-compact-layout .dashboard-kpi-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Current reporting-board layout. The explicit width state accounts for Gemini
+   sharing the app row, so charts and account tables stay usable. */
+.atglance-report-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+}
+
+.atglance-dashboard-kpis {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.atglance-dashboard-main {
+  grid-template-columns: minmax(0, 1.2fr) minmax(340px, 0.8fr);
+}
+
+.atglance-dashboard-secondary {
+  grid-template-columns: minmax(0, 0.85fr) minmax(360px, 1.15fr);
+}
+
+.atglance-full-layout .atglance-report-layout {
+  grid-template-columns: minmax(0, 1fr) 340px;
+}
+
+.atglance-mid-layout .atglance-report-layout {
+  grid-template-columns: minmax(0, 1fr) 300px;
+}
+
+.atglance-daily-brief {
+  min-width: 0;
+  min-height: 0;
+}
+
+.atglance-mid-layout .atglance-daily-brief {
+  min-height: 0;
+  padding: 24px;
+}
+
+.atglance-mid-layout .atglance-dashboard-kpis {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.atglance-mid-layout .atglance-dashboard-main,
+.atglance-mid-layout .atglance-dashboard-secondary,
+.atglance-compact-layout .atglance-dashboard-main,
+.atglance-compact-layout .atglance-dashboard-secondary {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.atglance-compact-layout .atglance-dashboard-kpis {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.atglance-compact-layout .atglance-report-layout {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .ai-prose .app-action-inline-chip:active,

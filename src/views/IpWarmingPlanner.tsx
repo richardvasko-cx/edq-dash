@@ -7,6 +7,20 @@ import { Target, BarChart2, Calendar, ChevronDown } from 'lucide-react';
 import '@material/web/button/filled-button.js';
 import '@material/web/icon/icon.js';
 
+type TicketContext = {
+  account?: string;
+  caseNumber?: string;
+  sendingDomains?: string[];
+  sendingIps?: string[];
+  ipPools?: string[];
+  campaigns?: string[];
+  mailboxProviders?: string[];
+  subaccounts?: string[];
+  issue?: string;
+  rootCause?: string;
+  metrics?: Record<string, number>;
+};
+
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
 const LIST_SIZES = [
@@ -113,7 +127,7 @@ function TextInput({ label, value, onChange, placeholder, type = 'text' }: {
           <span className="material-symbols-outlined text-[18px] opacity-60">calendar_today</span>
         </button>
         {pickerOpen && (
-          <div className="absolute left-0 mt-1 z-30 w-[280px] rounded-2xl bg-white dark:bg-[#2A2930] border border-outline-variant/20 shadow-xl p-4 flex flex-col gap-3">
+          <div className="absolute right-0 top-full mt-2 z-30 w-[290px] rounded-2xl bg-white dark:bg-[#2A2930] border border-outline-variant/20 shadow-xl p-4">
             <InlineDatePicker
               selectedDate={value ? new Date(value + 'T00:00:00') : null}
               onSelectDate={(date) => {
@@ -234,11 +248,32 @@ const DEFAULT_FORM: FormState = {
   upcomingCampaigns: 'No',
 };
 
-export default function IpWarmingPlanner() {
+export default function IpWarmingPlanner({ ticketContext }: { ticketContext?: TicketContext | null }) {
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
   const [config, setConfig] = useState<FormState>(DEFAULT_FORM);
   const [updating, setUpdating] = useState(false);
   const chartRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!ticketContext?.caseNumber) return;
+    const metrics = ticketContext.metrics || {};
+    const volume = Math.max(10_000, Math.min(5_000_000, metrics.count_sent || metrics.count_accepted || DEFAULT_FORM.targetVolume));
+    const issueText = `${ticketContext.issue || ''} ${ticketContext.rootCause || ''}`.toLowerCase();
+    const pastIssues = [
+      ...(issueText.includes('complaint') ? ['complaints'] : []),
+      ...(issueText.includes('block') || issueText.includes('reputation') ? ['blocklisting'] : []),
+      ...(issueText.includes('throttl') || issueText.includes('defer') ? ['throttling'] : []),
+    ];
+    const preloaded = {
+      ...DEFAULT_FORM,
+      targetVolume: volume,
+      totalAudience: String(metrics.count_targeted || metrics.count_sent || volume),
+      trafficType: /transactional/i.test(ticketContext.campaigns?.join(' ') || '') ? 'Transactional' : 'Marketing',
+      pastIssues: pastIssues.length ? pastIssues : ['none'],
+    };
+    setForm(preloaded);
+    setConfig(preloaded);
+  }, [ticketContext?.caseNumber]);
 
   const set = (field: keyof FormState, value: any) =>
     setForm(prev => ({ ...prev, [field]: value }));
@@ -398,6 +433,11 @@ export default function IpWarmingPlanner() {
             <p className="text-xs text-on-surface-variant dark:text-inverse-on-surface/65 mt-1">
               Calculate and project progressive schedules for warm-up and ramp campaigns.
             </p>
+            {ticketContext?.caseNumber && (
+              <p className="mt-2 text-xs font-semibold text-[#1A73E8]">
+                Preloaded for {ticketContext.account} · {ticketContext.caseNumber} · {ticketContext.sendingIps?.join(', ') || 'No sending IP recorded'} · {ticketContext.ipPools?.join(', ') || 'No IP pool recorded'}
+              </p>
+            )}
           </div>
           <div className="shrink-0">
             <md-filled-button

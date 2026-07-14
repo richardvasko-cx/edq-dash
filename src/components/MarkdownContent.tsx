@@ -11,6 +11,8 @@ interface InlineAppAction {
   view: 'glance' | 'investigation' | 'tools' | 'user_guide' | 'settings';
   toolsTab?: 'dig' | 'mx' | 'analyzer' | 'ip_warming';
   ticketSection?: 'Overview' | 'Authentication' | 'Deliverability' | 'Email Performance' | 'Support History' | 'Workspace';
+  panelLabel?: string;
+  toolPrefill?: 'sending_domain' | 'sending_ip';
 }
 
 interface Props {

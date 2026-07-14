@@ -63,6 +63,7 @@ interface Props {
   enabledMetrics?: string[];
   metricCatalog?: MetricDef[];
   tabUnderlineLayoutId?: string;
+  disabledResources?: ResourceKey[];
 }
 
 function Check({ checked }: { checked: boolean }) {
@@ -91,6 +92,7 @@ export default function MetricsFilterSheet({
   enabledMetrics,
   metricCatalog = METRIC_CATALOG,
   tabUnderlineLayoutId = 'sheet-tab-underline',
+  disabledResources = [],
 }: Props) {
   const [tab, setTab] = useState<Tab>('metrics');
   const [draftMetrics, setDraftMetrics] = useState<Set<string>>(() => new Set(selectedMetrics ?? []));
@@ -163,12 +165,15 @@ export default function MetricsFilterSheet({
 
   const toggleMetric = (key: string) => setDraftMetrics(s => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
   const toggleGroup = (g: MetricGroup) => setCollapsed(s => { const n = new Set(s); n.has(g) ? n.delete(g) : n.add(g); return n; });
-  const toggleFilterValue = (key: ResourceKey, value: string) => setDraftFilters(f => {
+  const toggleFilterValue = (key: ResourceKey, value: string) => {
+    if (disabledResources.includes(key)) return;
+    setDraftFilters(f => {
     const normalized = normalizeFilters(f);
     const cur = normalized[key];
     const next = cur.includes(value) ? cur.filter(v => v !== value) : [...cur, value];
-    return { ...normalized, [key]: next };
-  });
+      return { ...normalized, [key]: next };
+    });
+  };
 
   const apply = () => {
     onApplyMetrics([...draftMetrics].filter(isMetricEnabled));
@@ -348,10 +353,10 @@ export default function MetricsFilterSheet({
                           <button
                             key={r.key}
                             onClick={() => { setResource(r.key); setResourceMenu(false); }}
-                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-[14px] text-on-surface dark:text-inverse-on-surface hover:bg-[#2155CD]/8"
+                            className={cn('w-full flex items-center gap-2 px-3 py-2.5 text-left text-[14px] text-on-surface dark:text-inverse-on-surface hover:bg-[#2155CD]/8', disabledResources.includes(r.key) && 'opacity-45')}
                           >
                             <span className={cn('material-symbols-outlined text-[18px]', resource === r.key ? 'text-[#2155CD] dark:text-[#8AB4F8]' : 'text-transparent')}>check</span>
-                            {r.label}
+                            {r.label}{disabledResources.includes(r.key) && <span className="ml-auto rounded-full bg-on-surface/10 px-1.5 py-0.5 text-[9px] font-black uppercase">Coming soon</span>}
                           </button>
                         ))}
                       </div>
@@ -360,8 +365,9 @@ export default function MetricsFilterSheet({
 
                   {resource && (
                     <div className="flex flex-col gap-2 pt-1">
-                      {safeOptions[resource].length === 0 && <p className="text-[13px] text-on-surface-variant italic">No values available.</p>}
-                      {safeOptions[resource].map(v => (
+                      {disabledResources.includes(resource) && <p className="rounded-lg bg-surface-variant/35 p-3 text-[13px] font-semibold text-on-surface-variant">Coming soon — campaign data is not currently available for this investigation.</p>}
+                      {!disabledResources.includes(resource) && safeOptions[resource].length === 0 && <p className="text-[13px] text-on-surface-variant italic">No values available.</p>}
+                      {!disabledResources.includes(resource) && safeOptions[resource].map(v => (
                         <button key={v} onClick={() => toggleFilterValue(resource, v)} className="flex items-center gap-3 text-left">
                           <Check checked={(draftFilters[resource] ?? []).includes(v)} />
                           <span className="text-[14px] text-on-surface dark:text-inverse-on-surface break-all">{v}</span>

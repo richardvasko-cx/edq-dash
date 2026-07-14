@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { motion } from 'motion/react';
 import {
   Bar,
   CartesianGrid,
@@ -31,6 +32,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '../../App';
+import { md3Ease, md3Enter } from '../../lib/md3Motion';
 import MetricsFilterSheet from '../charts/MetricsFilterSheet';
 import { EMPTY_FILTERS, type ResourceFilters, type ResourceKey } from '../charts/MetricsFilterTypes';
 import PanelCustomizeSheet, { type PanelOutlineItem } from '../charts/PanelCustomizeSheet';
@@ -798,6 +800,7 @@ function Panel({
   className = '',
   actions,
   theme = 'dark',
+  motionDelay = 0,
 }: {
   title: string;
   subtitle?: string;
@@ -806,13 +809,12 @@ function Panel({
   className?: string;
   actions?: React.ReactNode;
   theme?: 'dark' | 'light';
-  editMode?: boolean;
-  onRemove?: () => void;
+  motionDelay?: number;
 }) {
   const isDark = theme === 'dark';
   return (
     <PanelThemeContext.Provider value={theme}>
-      <section
+      <motion.section
         className={cn(
           isDark
             ? 'bg-[#300266] border-purple-300/10'
@@ -822,6 +824,8 @@ function Panel({
         )}
         data-gem-panel
         data-gem-panel-label={title}
+        {...md3Enter}
+        transition={{ duration: 0.36, ease: md3Ease, delay: motionDelay }}
       >
         <header className={cn(
           'flex items-center justify-between gap-4 px-5 py-4 border-b',
@@ -835,7 +839,7 @@ function Panel({
           {actions && <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>}
         </header>
         <div className="px-5 pt-5 pb-5 flex-1 overflow-hidden">{children}</div>
-      </section>
+      </motion.section>
     </PanelThemeContext.Provider>
   );
 }
@@ -1302,7 +1306,13 @@ function MasterDeliverabilityPanel({
   const selected = new Set(selectedMetrics);
 
   return (
-    <section className="relative overflow-visible bg-[#300266] rounded-2xl p-5 border border-purple-300/10 flex flex-col gap-4" data-gem-panel data-gem-panel-label="Event types over time">
+    <motion.section
+      className="relative overflow-visible bg-[#300266] rounded-2xl p-5 border border-purple-300/10 flex flex-col gap-4"
+      data-gem-panel
+      data-gem-panel-label="Event types over time"
+      {...md3Enter}
+      transition={{ duration: 0.36, ease: md3Ease, delay: 0.18 }}
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 className="text-[18px] font-black text-purple-100">Event types over time</h3>
         {actions}
@@ -1340,7 +1350,7 @@ function MasterDeliverabilityPanel({
           <LegendDot key={metric.key} color={metric.color} label={metric.label} />
         ))}
       </div>
-    </section>
+    </motion.section>
   );
 }
 
@@ -1685,11 +1695,13 @@ export function DeliverabilityDiagnosticsDashboard({
   dateRange,
   dateControl,
   caseHistory = [],
+  initialResourceFilters,
 }: {
   ticket: CaseRecord;
   dateRange?: DashboardFilters;
   dateControl?: React.ReactNode;
   caseHistory?: HistoricalMetricRecord[];
+  initialResourceFilters?: ResourceFilters;
 }) {
   const daily = useMemo(() => buildTrendRows(ticket), [ticket]);
   const allBounceRows = useMemo(() => buildDiagnosticRows(ticket, 'bounce'), [ticket]);
@@ -1861,6 +1873,10 @@ export function DeliverabilityDiagnosticsDashboard({
       ip: filters.sendingIps[0] ?? '',
     }));
   };
+  useEffect(() => {
+    if (!initialResourceFilters) return;
+    applyMasterResourceFilters(initialResourceFilters);
+  }, [initialResourceFilters]); // Scope passed from Email Performance on an explicit cross-view drill-down.
   const sharedPanelMetrics = useMemo(
     () => commonPanelMetrics(panelMetricSelections),
     [panelMetricSelections]
@@ -1940,10 +1956,7 @@ export function DeliverabilityDiagnosticsDashboard({
       return next;
     });
   };
-  const editProps = (key: DeliverabilityPanelKey) => ({
-    editMode,
-    onRemove: () => hidePanel(key),
-  });
+  const editProps = (_key: DeliverabilityPanelKey) => ({});
   const sent = sumRows(viewDaily, 'sent');
   const delivered = sumRows(viewDaily, 'delivered');
   const deferralTrendRows = useMemo(() => scaleTrendRows(viewDaily, diagnosticSegmentRatio(allDeferralRows, sharedDiagnosticFilters)), [allDeferralRows, sharedDiagnosticFilters, viewDaily]);
@@ -2297,6 +2310,16 @@ export function DeliverabilityDiagnosticsDashboard({
   ];
   const commonMetricDefs = metricDefsFor(globalActiveMetrics, providerMasterMetrics);
   const globalActionCount = activeResourceFilterCount + commonMetricDefs.length;
+  const metricsMotionKey = [
+    ticket.case_number,
+    dateRange?.from ?? '',
+    dateRange?.to ?? '',
+    sharedFilters.isp,
+    sharedFilters.bounceClass,
+    sharedFilters.pool,
+    sharedFilters.ip,
+    sharedFilters.query,
+  ].join(':');
 
   return (
     <div className="flex flex-col gap-7">
@@ -2362,7 +2385,13 @@ export function DeliverabilityDiagnosticsDashboard({
         />
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+      <motion.div
+        key={metricsMotionKey}
+        initial={{ y: 18 }}
+        animate={{ y: 0 }}
+        transition={{ duration: 0.34, ease: md3Ease }}
+        className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3"
+      >
         <KpiTileFlat label="Targeted" value={formatInt(targeted)} wowDiff={getDiff('targeted')} />
         <KpiTileFlat label={isAmazonSes ? 'Delivered' : 'Accepted'} value={formatInt(accepted)} wowDiff={getDiff('accepted')} />
         <KpiTileFlat label={isAmazonSes ? 'Delivery Rate' : 'Accepted Rate'} value={formatPct(acceptedRate)} wowDiff={getDiff('acceptedRate')} />
@@ -2375,7 +2404,7 @@ export function DeliverabilityDiagnosticsDashboard({
         <KpiTileFlat label="Deferred Rate" value={formatPct(deferredRate)} wowDiff={getDiff('deferredRate')} inverse={true} />
         <KpiTileFlat label="Blocked" value={formatInt(blocked)} wowDiff={getDiff('blocked')} inverse={true} />
         <KpiTileFlat label="Dropped" value={formatInt(dropped)} wowDiff={getDiff('dropped')} inverse={true} />
-      </div>
+      </motion.div>
 
       <div className="h-1 bg-transparent" aria-hidden="true" />
 
@@ -2385,6 +2414,7 @@ export function DeliverabilityDiagnosticsDashboard({
         icon={Globe2}
         actions={panelActions('volume', ['query'])}
         className={cn(!isPanelVisible('volume') && 'hidden')}
+        motionDelay={0.04}
         {...editProps('volume')}
       >
         <TrendMetricChart rows={volumeTrendRowsScoped} metricKeys={volumeMetricSelection} masterMetrics={providerMasterMetrics} height={260} />
@@ -2398,6 +2428,7 @@ export function DeliverabilityDiagnosticsDashboard({
           theme="light"
           actions={panelActions('deliveries', ['query'])}
           className={cn(!isPanelVisible('deliveries') && 'hidden')}
+          motionDelay={0.08}
           {...editProps('deliveries')}
         >
           <DataTable
@@ -2414,6 +2445,7 @@ export function DeliverabilityDiagnosticsDashboard({
           theme="light"
           actions={panelActions('ipVolume', ['pool', 'ip', 'query'])}
           className={cn(!isPanelVisible('ipVolume') && 'hidden')}
+          motionDelay={0.12}
           {...editProps('ipVolume')}
         >
           <DataTable
@@ -2435,6 +2467,7 @@ export function DeliverabilityDiagnosticsDashboard({
         theme="light"
         actions={panelActions('ispSummary', ['isp', 'query'])}
         className={cn(!isPanelVisible('ispSummary') && 'hidden')}
+        motionDelay={0.16}
         {...editProps('ispSummary')}
       >
         <DataTable
@@ -2485,6 +2518,7 @@ export function DeliverabilityDiagnosticsDashboard({
           subtitle="Accepted mail versus temporary deferral responses"
           icon={MailWarning}
           actions={panelActions('deferralTrend', ['isp', 'bounceClass', 'query'])}
+          motionDelay={0.22}
           {...editProps('deferralTrend')}
         >
             <TrendMetricChart rows={deferralTrendRowsScoped} metricKeys={panelMetricSelections.deferralTrend} masterMetrics={providerMasterMetrics} height={280} />
@@ -2497,6 +2531,7 @@ export function DeliverabilityDiagnosticsDashboard({
           subtitle="Daily delivery area with hardbounce baseline"
           icon={AlertTriangle}
           actions={panelActions('bounceTrend', ['isp', 'bounceClass', 'query'])}
+          motionDelay={0.26}
           {...editProps('bounceTrend')}
         >
             <TrendMetricChart rows={bounceTrendRowsScoped} metricKeys={panelMetricSelections.bounceTrend} masterMetrics={providerMasterMetrics} height={280} />
@@ -2512,6 +2547,7 @@ export function DeliverabilityDiagnosticsDashboard({
             icon={TableProperties}
             theme="light"
             actions={panelActions('bounceClassOverall', ['bounceClass', 'query'])}
+            motionDelay={0.3}
             {...editProps('bounceClassOverall')}
           >
             <DataTable
@@ -2531,6 +2567,7 @@ export function DeliverabilityDiagnosticsDashboard({
             subtitle="Inner ring: class. Outer ring: ISP and class."
             icon={ChartPie}
             actions={panelActions('bounceClassByIsp', ['isp', 'bounceClass', 'query'])}
+            motionDelay={0.34}
             {...editProps('bounceClassByIsp')}
           >
             <div className="grid grid-cols-1 lg:grid-cols-[1fr_260px] gap-4 items-center">
@@ -2570,6 +2607,7 @@ export function DeliverabilityDiagnosticsDashboard({
           icon={Database}
           theme="light"
           actions={panelActions('bounceReason', ['isp', 'bounceClass', 'query'])}
+          motionDelay={0.38}
           {...editProps('bounceReason')}
         >
           <DataTable
@@ -2592,6 +2630,7 @@ export function DeliverabilityDiagnosticsDashboard({
           icon={Inbox}
           theme="light"
           actions={panelActions('deferralReason', ['isp', 'bounceClass', 'query'])}
+          motionDelay={0.42}
           {...editProps('deferralReason')}
         >
           <DataTable
@@ -2613,6 +2652,7 @@ export function DeliverabilityDiagnosticsDashboard({
           subtitle="Mailbox providers contributing temporary failures"
           icon={ChartPie}
           actions={panelActions('deferralIsp', ['isp', 'bounceClass', 'query'])}
+          motionDelay={0.46}
           {...editProps('deferralIsp')}
         >
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_220px] gap-4 items-center">
@@ -2648,6 +2688,7 @@ export function DeliverabilityDiagnosticsDashboard({
           icon={Database}
           theme="light"
           actions={panelActions('rawDeferrals', ['isp', 'bounceClass', 'query'])}
+          motionDelay={0.5}
           {...editProps('rawDeferrals')}
         >
           <DataTable

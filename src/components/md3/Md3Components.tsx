@@ -621,45 +621,9 @@ interface InlineDatePickerProps {
 
 export function InlineDatePicker({ selectedDate, onSelectDate, onClose }: InlineDatePickerProps) {
   const [currentMonth, setCurrentMonth] = useState(new Date());
-  const [isManualInput, setIsManualInput] = useState(false);
-  const [inputValue, setInputValue] = useState('');
-  const [inputError, setInputError] = useState('');
-
-  // Helper to format date to MM/DD/YYYY
-  const formatDateToInput = (d: Date): string => {
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    const yyyy = d.getFullYear();
-    return `${mm}/${dd}/${yyyy}`;
-  };
-
-  // Helper to parse date MM/DD/YYYY
-  const parseInputToDate = (s: string): Date | null => {
-    const parts = s.split(/[\/\-\.]/);
-    if (parts.length !== 3) return null;
-    let month, day, year;
-    if (parts[0].length === 4) {
-      // YYYY-MM-DD
-      year = parseInt(parts[0], 10);
-      month = parseInt(parts[1], 10) - 1;
-      day = parseInt(parts[2], 10);
-    } else {
-      // MM/DD/YYYY
-      month = parseInt(parts[0], 10) - 1;
-      day = parseInt(parts[1], 10);
-      year = parseInt(parts[2], 10);
-    }
-    if (isNaN(month) || isNaN(day) || isNaN(year)) return null;
-    const d = new Date(year, month, day);
-    if (d.getFullYear() !== year || d.getMonth() !== month || d.getDate() !== day) return null;
-    return d;
-  };
 
   useEffect(() => {
     setCurrentMonth(selectedDate || new Date());
-    setIsManualInput(false);
-    setInputValue(selectedDate ? formatDateToInput(selectedDate) : '');
-    setInputError('');
   }, [selectedDate]);
 
   const getDaysInMonth = (month: Date) => {
@@ -684,150 +648,76 @@ export function InlineDatePicker({ selectedDate, onSelectDate, onClose }: Inline
     setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1));
   };
 
-  const headerDateText = useMemo(() => {
-    if (isManualInput) {
-      const parsed = parseInputToDate(inputValue);
-      if (parsed) {
-        return parsed.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-      }
-      return 'Select date';
-    }
-    if (selectedDate) {
-      return selectedDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-    }
-    return 'Select date';
-  }, [selectedDate, isManualInput, inputValue]);
-
   const handleOk = () => {
-    if (isManualInput) {
-      const parsed = parseInputToDate(inputValue);
-      if (!parsed) {
-        setInputError('Invalid date. Use MM/DD/YYYY.');
-        return;
-      }
-      onSelectDate(parsed);
-    }
     if (onClose) onClose();
   };
 
   const handleSelectDay = (day: Date) => {
     onSelectDate(day);
-    setInputValue(formatDateToInput(day));
-    setInputError('');
   };
 
   const today = new Date();
 
   return (
-    <div className="w-full flex flex-col select-none bg-white dark:bg-[#28272C] text-[#1D1B20] dark:text-[#E6E1E9]">
-      {/* Header section */}
-      <div className="flex flex-col gap-0.5 pb-2">
-        <span className="text-[10px] font-bold text-[#1A73E8] dark:text-[#8AB4F8] tracking-wider uppercase">
-          {isManualInput ? 'Enter date' : 'Select date'}
+    <div className="flex flex-col gap-3 select-none bg-white text-[#1D1B20] dark:bg-[#2A2930] dark:text-[#E6E1E9]">
+      <div className="flex items-center justify-between px-1">
+        <span className="text-[13px] font-bold capitalize text-[#1D1B20] dark:text-[#E6E1E9]">
+          {currentMonth.toLocaleDateString('default', { month: 'long', year: 'numeric' })}
         </span>
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xl font-bold text-[#1D1B20] dark:text-[#E6E1E9]">
-            {headerDateText}
-          </span>
-          <button
-            type="button"
-            onClick={() => setIsManualInput(v => !v)}
-            className="w-8 h-8 rounded-full flex items-center justify-center text-[#1A73E8] dark:text-[#8AB4F8] hover:bg-black/6 dark:hover:bg-white/6 transition-colors"
-          >
-            <span className="material-symbols-outlined text-[18px]">
-              {isManualInput ? 'calendar_today' : 'edit'}
-            </span>
+        <div className="flex items-center gap-0.5">
+          <button type="button" onClick={prevMonth} className="flex h-7 w-7 items-center justify-center rounded-full text-[#1A73E8] transition-colors hover:bg-black/6 dark:text-[#8AB4F8] dark:hover:bg-white/6">
+            <span className="material-symbols-outlined text-[18px]">chevron_left</span>
+          </button>
+          <button type="button" onClick={nextMonth} className="flex h-7 w-7 items-center justify-center rounded-full text-[#1A73E8] transition-colors hover:bg-[#1A73E8]/10 dark:text-[#8AB4F8] dark:hover:bg-white/6">
+            <span className="material-symbols-outlined text-[18px]">chevron_right</span>
           </button>
         </div>
       </div>
-      <div className="h-px bg-outline-variant/20 dark:bg-white/10 w-full mb-2" />
 
-      {/* Content view toggle */}
-      {isManualInput ? (
-        <div className="py-2 flex flex-col gap-2 min-h-[220px]">
-          <input
-            type="text"
-            value={inputValue}
-            onChange={(e) => {
-              setInputValue(e.target.value);
-              setInputError('');
-            }}
-            placeholder="MM/DD/YYYY"
-            className="w-full bg-white dark:bg-black/20 border border-outline-variant dark:border-white/12 rounded-lg px-3 py-2 text-sm text-on-surface focus:outline-none focus:border-[#1A73E8] dark:focus:border-[#8AB4F8] transition-all"
-            autoFocus
-          />
-          <span className="text-[11px] text-on-surface-variant/70">Format: MM/DD/YYYY</span>
-          {inputError && (
-            <span className="text-[11px] text-[#B3261E] font-semibold">{inputError}</span>
-          )}
-        </div>
-      ) : (
-        <div className="flex flex-col min-h-[220px]">
-          {/* Month selector controls */}
-          <div className="py-1 flex items-center justify-between">
-            <span className="text-[13px] font-bold text-[#1D1B20] dark:text-[#E6E1E9] capitalize">
-              {currentMonth.toLocaleDateString('default', { month: 'long', year: 'numeric' })}
-            </span>
-            <div className="flex items-center gap-0.5">
-              <button type="button" onClick={prevMonth} className="w-7 h-7 rounded-full flex items-center justify-center text-[#1A73E8] dark:text-[#8AB4F8] hover:bg-black/6 dark:hover:bg-white/6">
-                <span className="material-symbols-outlined text-[18px]">chevron_left</span>
-              </button>
-              <button type="button" onClick={nextMonth} className="w-7 h-7 rounded-full flex items-center justify-center text-[#1A73E8] dark:text-[#8AB4F8] hover:bg-black/6 dark:hover:bg-white/6">
-                <span className="material-symbols-outlined text-[18px]">chevron_right</span>
-              </button>
-            </div>
-          </div>
+      <div className="grid grid-cols-7 gap-x-0.5 gap-y-0.5 text-center">
+        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
+          <span key={i} className="flex h-8 w-8 items-center justify-center text-[10px] font-black text-on-surface-variant/70">{d}</span>
+        ))}
 
-          {/* Days Grid */}
-          <div className="grid grid-cols-7 gap-y-0.5 gap-x-0.5 text-center mt-2">
-            {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
-              <span key={i} className="text-[10px] font-black text-on-surface-variant/70 w-8 h-8 flex items-center justify-center">{d}</span>
-            ))}
-            
-            {/* Empty cells offset */}
-            {Array.from({ length: firstDayIndex }).map((_, idx) => (
-              <div key={`empty-${idx}`} className="w-8 h-8" />
-            ))}
+        {Array.from({ length: firstDayIndex }).map((_, idx) => (
+          <div key={`empty-${idx}`} className="h-8 w-8" />
+        ))}
 
-            {/* Day Buttons */}
-            {days.map((day) => {
-              const isSelected = selectedDate?.toDateString() === day.toDateString();
-              const isToday = today.toDateString() === day.toDateString();
-              return (
-                <button
-                  type="button"
-                  key={day.toISOString()}
-                  onClick={() => handleSelectDay(day)}
-                  className={cn(
-                    'w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold transition-colors',
-                    isSelected
-                      ? 'bg-[#1A73E8] text-white dark:bg-[#8AB4F8] dark:text-[#1D1B20]'
-                      : isToday
-                      ? 'border border-[#1A73E8] text-[#1A73E8] dark:border-[#8AB4F8] dark:text-[#8AB4F8] hover:bg-[#1A73E8]/10'
-                      : 'text-[#1D1B20] dark:text-[#E6E1E9] hover:bg-black/6 dark:hover:bg-white/6'
-                  )}
-                >
-                  {day.getDate()}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
+        {days.map((day) => {
+          const isSelected = selectedDate?.toDateString() === day.toDateString();
+          const isToday = today.toDateString() === day.toDateString();
+          return (
+            <button
+              type="button"
+              key={day.toISOString()}
+              onClick={() => handleSelectDay(day)}
+              className={cn(
+                'flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold transition-colors',
+                isSelected
+                  ? 'bg-[#1A73E8] text-white dark:bg-[#8AB4F8] dark:text-[#1D1B20]'
+                  : isToday
+                    ? 'border border-[#1A73E8] text-[#1A73E8] hover:bg-[#1A73E8]/10 dark:border-[#8AB4F8] dark:text-[#8AB4F8]'
+                    : 'text-[#1D1B20] hover:bg-black/6 dark:text-[#E6E1E9] dark:hover:bg-white/6'
+              )}
+            >
+              {day.getDate()}
+            </button>
+          );
+        })}
+      </div>
 
-      {/* Action buttons footer */}
-      <div className="pt-2 flex justify-end gap-2 border-t border-outline-variant/10">
+      <div className="flex justify-end gap-3 border-t border-outline-variant/10 pt-3">
         <button
           type="button"
           onClick={onClose}
-          className="px-3 py-1.5 rounded-full text-xs font-bold text-[#1A73E8] dark:text-[#8AB4F8] hover:bg-[#1A73E8]/10 transition-colors"
+          className="rounded-full px-3 py-1.5 text-xs font-bold text-[#1A73E8] transition-colors hover:bg-[#1A73E8]/10 dark:text-[#8AB4F8]"
         >
           Cancel
         </button>
         <button
           type="button"
           onClick={handleOk}
-          className="px-3 py-1.5 rounded-full text-xs font-bold text-[#1A73E8] dark:text-[#8AB4F8] hover:bg-[#1A73E8]/10 transition-colors"
+          className="rounded-full px-3 py-1.5 text-xs font-bold text-[#1A73E8] transition-colors hover:bg-[#1A73E8]/10 dark:text-[#8AB4F8]"
         >
           OK
         </button>
@@ -1206,10 +1096,10 @@ export function Md3SideSheet({
           />
 
           <motion.div
-            initial={{ x: '100%' }}
-            animate={{ x: 0 }}
-            exit={{ x: '100%' }}
-            transition={{ type: 'tween', duration: 0.35, ease: [0.05, 0.7, 0.1, 1] }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ type: 'tween', duration: 0.24, ease: [0.2, 0, 0, 1] }}
             className={cn(
               'relative bg-surface-bright rounded-l-2xl w-full max-w-[450px] h-full shadow-2xl flex flex-col border-l border-outline-variant/30 text-on-surface dark:text-inverse-on-surface z-10',
               className

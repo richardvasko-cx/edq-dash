@@ -21,7 +21,12 @@ const NOTIFICATIONS_ENABLED = false;
 function serializeSectionContext(section: string, ticket: CaseRecord | null): string {
   if (!ticket) return `Section: ${section} (no active ticket)`;
   const m = ticket.metrics;
-  const base = `Case ${ticket.case_number} — ${ticket.account_name}\nIssue: ${ticket.case_subject}\nRoot cause: ${ticket.root_cause_summary}\n`;
+  const infrastructure = [
+    `Assigned IP pools: ${ticket.ip_pools.length ? ticket.ip_pools.join(', ') : 'No IP pool recorded'}`,
+    `Sending IPs: ${ticket.sending_ips.length ? ticket.sending_ips.join(', ') : 'No sending IP recorded'}`,
+    `Campaigns: ${ticket.campaigns.length ? ticket.campaigns.join(', ') : 'No campaign recorded'}`,
+  ].join('\n');
+  const base = `Case ${ticket.case_number} — ${ticket.account_name}\nIssue: ${ticket.case_subject}\nRoot cause: ${ticket.root_cause_summary}\n${infrastructure}\n`;
   switch (section) {
     case 'Overview':
       return base + `Accepted Rate: ${pct(m.accepted_rate)}\nBounce Rate: ${pct(m.bounce_rate)}\nOpen Rate: ${pct(m.nonprefetched_open_rate)}\nSpam Complaint Rate: ${pct(m.spam_complaint_rate)}`;
@@ -135,6 +140,8 @@ function buildTicketContext(t: CaseRecord, activeSection = 'Overview', activeFil
       { label: 'Open Rate', value: pct(t.metrics.nonprefetched_open_rate) },
       { label: 'Spam Complaint Rate', value: pct(t.metrics.spam_complaint_rate) },
       { label: 'Sending Domain', value: t.sending_domains[0] },
+      { label: 'Assigned IP Pools', value: t.ip_pools.join(', ') },
+      { label: 'Sending IPs', value: t.sending_ips.join(', ') },
       ...(activeFilters?.selectedIp ? [{ label: 'Selected IP', value: activeFilters.selectedIp }] : []),
       ...(activeFilters?.selectedDomain || activeFilters?.selectedSendingDomain ? [{ label: 'Selected Sending Domain', value: activeFilters.selectedDomain || activeFilters.selectedSendingDomain }] : []),
       ...(activeFilters?.selectedPool ? [{ label: 'Selected IP Pool', value: activeFilters.selectedPool }] : []),
@@ -330,13 +337,33 @@ type SearchItem = {
 };
 
 const GUIDE_PATH_PREFIX_RE = /^(docs\/)?user guide\//i;
+const GUIDE_LABEL_ACRONYMS: Record<string, string> = {
+  api: 'API',
+  apis: 'APIs',
+  dkim: 'DKIM',
+  dmarc: 'DMARC',
+  dns: 'DNS',
+  faq: 'FAQ',
+  id: 'ID',
+  ids: 'IDs',
+  ip: 'IP',
+  ips: 'IPs',
+  qa: 'QA',
+  sdk: 'SDK',
+  sdks: 'SDKs',
+  sms: 'SMS',
+  spf: 'SPF',
+  sql: 'SQL',
+  sso: 'SSO',
+  saml: 'SAML',
+};
 
 const humanizeGuideSegment = (segment: string) => segment
   .replace(/\.md$/i, '')
   .replace(/[_-]+/g, ' ')
   .replace(/\s+/g, ' ')
   .trim()
-  .replace(/\b\w/g, c => c.toUpperCase());
+  .replace(/\b[\w']+\b/g, word => GUIDE_LABEL_ACRONYMS[word.toLowerCase()] ?? (word.charAt(0).toUpperCase() + word.slice(1)));
 
 const formatGuideSearchResult = (path = '', fallbackTitle = '') => {
   const cleanPath = path
@@ -394,6 +421,14 @@ const scoreSearchItem = (item: SearchItem & { searchText: string }, rawQuery: st
   return score;
 };
 
+const QUESTION_START_RE = /^(how|why|what|when|where|who|which|can|could|should|would|do|does|did|is|are|am|will)\b/i;
+const isNaturalLanguageGeminiPrompt = (value: string) => {
+  const q = value.trim();
+  if (!q) return false;
+  const tokens = q.split(/\s+/).filter(Boolean);
+  return q.includes('?') || (tokens.length >= 5 && QUESTION_START_RE.test(q));
+};
+
 function formatCaseDate(isoString: string | null | undefined): string {
   if (!isoString) return '';
   const date = new Date(isoString);
@@ -438,31 +473,25 @@ export default function Layout({
 }: LayoutProps) {
   const [isNavExpanded, setIsNavExpanded] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
-  // Auto-open Gemini on the very first dashboard visit (per-browser, persisted)
-  // so new users immediately see the assistant; subsequent loads respect the
-  // user's preference to keep it closed.
+  // Gemini starts closed. It opens only from the prompt pill or an explicit
+  // Ask Gemini action, so Dashboard retains its default layout on first load.
   const [aiPanelIsLoading, setAiPanelIsLoading] = useState(false);
   const [aiPanelChips, setAiPanelChips] = useState<Array<{ label: string; content: string }>>([]);
-  const [isAiPanelOpen, setIsAiPanelOpen] = useState(() => {
-    try {
-      const seen = localStorage.getItem('edq_gemini_first_open_done');
-      return !seen && (currentView === 'glance' || currentView === 'charts');
-    } catch { return false; }
-  });
-  useEffect(() => {
-    if (isAiPanelOpen) {
-      try { localStorage.setItem('edq_gemini_first_open_done', '1'); } catch {}
-    }
-  }, [isAiPanelOpen]);
+  const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
   const [aiPanelWidth, setAiPanelWidth] = useState(() => {
     try {
       const stored = Number(localStorage.getItem('edq_ai_panel_width'));
-      return Number.isFinite(stored) ? Math.max(320, Math.min(640, stored)) : 340;
+      return Number.isFinite(stored) ? Math.max(420, Math.min(560, stored)) : 460;
     } catch {
-      return 340;
+      return 460;
     }
   });
+  const [inlineShellWidth, setInlineShellWidth] = useState(0);
   const [isAiPanelDragging, setIsAiPanelDragging] = useState(false);
+  // Keep an automatic responsive collapse distinct from a user closing Gemini.
+  // That way widening the same window restores the side panel instead of
+  // leaving Gemini permanently closed after a narrow-width transition.
+  const [aiPanelAutoCollapsed, setAiPanelAutoCollapsed] = useState(false);
   const [aiChatHistory, setAiChatHistory] = useState<ChatMessage[]>([]);
   const [screenContext, setScreenContext] = useState<ScreenContext | null>(null);
   const [activeFilters, setActiveFilters] = useState<ActiveFiltersContext | null>(null);
@@ -492,6 +521,7 @@ export default function Layout({
   const settingsRef = useRef<HTMLDivElement>(null);
   const inlineSearchRef = useRef<HTMLDivElement>(null);
   const centerSearchRef = useRef<HTMLDivElement>(null);
+  const inlineShellRef = useRef<HTMLDivElement>(null);
 
   const [pillSelectorActive, setPillSelectorActive] = useState(false);
   const [pillPendingChip, setPillPendingChip] = useState<ContextChip | null>(null);
@@ -500,6 +530,54 @@ export default function Layout({
   const mainContentRef = useRef<HTMLDivElement>(null);
   const scrollStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pageScrolling, setPageScrolling] = useState(false);
+  const effectiveTicketPanelOpen = isTicketPanelOpen;
+  const AI_PANEL_MIN_WIDTH = 420;
+  const AI_PANEL_MAX_WIDTH = 560;
+  // Collapse the side sheet only when the real content row can no longer keep
+  // the Dashboard/Daily Brief in its intended wide composition. This is measured
+  // from the actual flex row, not guessed from viewport width.
+  const MAIN_MIN_WIDTH_WITH_AI = currentView === 'glance' ? 760 : 700;
+  const maxInlineAiPanelWidth = Math.max(0, inlineShellWidth - MAIN_MIN_WIDTH_WITH_AI);
+  const canKeepAiPanelInline = maxInlineAiPanelWidth >= AI_PANEL_MIN_WIDTH;
+  const effectiveAiPanelWidth = isAiPanelOpen && canKeepAiPanelInline
+    ? Math.max(AI_PANEL_MIN_WIDTH, Math.min(aiPanelWidth, AI_PANEL_MAX_WIDTH, maxInlineAiPanelWidth))
+    : 0;
+
+  // Resize can make an already-open side sheet no longer fit. Collapse it
+  // back to the pill as soon as it is safe to do so; never overlay dashboard
+  // content as a fallback. This is reversible: return to a fitting width and
+  // the panel opens again. A manual close never sets the auto-collapsed flag.
+  useEffect(() => {
+    if (inlineShellWidth > 0 && !canKeepAiPanelInline && isAiPanelOpen) {
+      setIsAiPanelOpen(false);
+      setAiPanelAutoCollapsed(true);
+      // The side sheet has become the prompt surface at this width. Expand it
+      // immediately so the user can carry on rather than finding a closed
+      // Gemini launcher at the bottom of the page.
+      window.setTimeout(() => window.dispatchEvent(new Event('edq:focus-gemini-pill')), 0);
+      return;
+    }
+    if (inlineShellWidth > 0 && canKeepAiPanelInline && aiPanelAutoCollapsed) {
+      setAiPanelAutoCollapsed(false);
+      setIsAiPanelOpen(true);
+    }
+  }, [aiPanelAutoCollapsed, canKeepAiPanelInline, inlineShellWidth, isAiPanelOpen]);
+
+  useEffect(() => {
+    const el = inlineShellRef.current;
+    if (!el) return;
+    const updateInlineShellWidth = () => {
+      setInlineShellWidth(el.getBoundingClientRect().width);
+    };
+    updateInlineShellWidth();
+    const resizeObserver = new ResizeObserver(updateInlineShellWidth);
+    resizeObserver.observe(el);
+    window.addEventListener('resize', updateInlineShellWidth);
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', updateInlineShellWidth);
+    };
+  }, []);
 
   useEffect(() => {
     const el = mainContentRef.current;
@@ -523,6 +601,7 @@ export default function Layout({
     if (seedMessages !== undefined) setAiChatHistory(seedMessages.length ? seedMessages : []);
     if (pendingQuery) setAiPendingQuery(pendingQuery);
     if (pendingQueryDisplay !== undefined) setAiPendingQueryDisplay(pendingQueryDisplay);
+    setAiPanelAutoCollapsed(false);
     setIsAiPanelOpen(true);
     setShowNotifications(false);
   }, []);
@@ -660,6 +739,28 @@ export default function Layout({
   const openGuideArticle = onOpenGuideArticle;
 
   const runAppAction = (action: AppAction) => {
+    const valueFor = (label: string) => screenContext?.data?.find(item => item.label === label)?.value;
+    const ticket = ticketsList.find(item => item.case_number === (screenContext?.recordId || selectedTicketId));
+    const navigationContext = {
+      action,
+      ticket: {
+        account: ticket?.account_name || screenContext?.title || '',
+        caseNumber: ticket?.case_number || screenContext?.recordId || selectedTicketId || '',
+        sendingDomains: ticket?.sending_domains || [valueFor('Sending Domain') || valueFor('Selected Sending Domain')].filter(Boolean),
+        sendingIps: ticket?.sending_ips || [valueFor('Sending IPs') || valueFor('Selected IP')].filter(Boolean),
+        ipPools: ticket?.ip_pools || [valueFor('Assigned IP Pools') || valueFor('Selected IP Pool')].filter(Boolean),
+        campaigns: ticket?.campaigns || [valueFor('Selected Campaign')].filter(Boolean),
+        mailboxProviders: ticket?.mailbox_providers || [],
+        subaccounts: ticket?.subaccounts || [],
+        issue: ticket?.case_subject || screenContext?.issue || '',
+        rootCause: ticket?.root_cause_summary || screenContext?.rca || '',
+        metrics: ticket?.metrics || {},
+      },
+    };
+    try {
+      sessionStorage.setItem('edq_gemini_app_action', JSON.stringify(navigationContext));
+      window.dispatchEvent(new Event('edq:gemini-app-action'));
+    } catch {}
     if (action.view === 'tools') {
       if (action.toolsTab) onToolsTabChange(action.toolsTab);
       onNavigate('tools');
@@ -702,7 +803,12 @@ export default function Layout({
       }
       if (!panel) return;
 
-      // Don't prevent default — let article navigation etc. still work
+      // Context-pick mode is a selection affordance, not normal navigation.
+      // Prevent the underlying card/tab click from changing the screen and
+      // reinitialising the Gemini pill while a chip is being added.
+      e.preventDefault();
+      e.stopPropagation();
+
       let label = panel.getAttribute('data-gem-panel-label') || '';
       if (!label) {
         const heading = panel.querySelector('h1, h2, h3, h4, h5, h6, .font-bold, .font-semibold') as HTMLElement | null;
@@ -784,6 +890,8 @@ export default function Layout({
   // Ticket panel local state
   const [ticketSearch, setTicketSearch] = useState('');
   const [ticketFilter, setTicketFilter] = useState<'All' | 'Open' | 'Closed'>('Open');
+  const [ticketSort, setTicketSort] = useState<'newest' | 'oldest' | 'priority-low' | 'priority-high'>('newest');
+  const [isTicketSortMenuOpen, setIsTicketSortMenuOpen] = useState(false);
   const [panelWidth, setPanelWidth] = useState(380);
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const aiDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -939,8 +1047,10 @@ export default function Layout({
 
   const query = globalSearch.toLowerCase().trim();
 
+  const isGeminiPromptSearch = isNaturalLanguageGeminiPrompt(globalSearch);
+
   useEffect(() => {
-    if (!query || query.length < 2) { setServerGuideResults([]); return; }
+    if (!query || query.length < 2 || isGeminiPromptSearch) { setServerGuideResults([]); return; }
     const timer = setTimeout(() => {
       fetch(`/api/search?q=${encodeURIComponent(query)}`)
         .then(r => r.ok ? r.json() : { guides: [] })
@@ -958,9 +1068,10 @@ export default function Layout({
         .catch(() => {});
     }, 180);
     return () => clearTimeout(timer);
-  }, [query]);
+  }, [query, isGeminiPromptSearch]);
 
   const searchResults: (SearchItem & { searchText: string })[] = React.useMemo(() => {
+    if (isGeminiPromptSearch) return [];
     if (!query) return [];
     const tokens = query.split(/\s+/).filter(Boolean);
     const localMatches = allSearchItems.filter(item => tokens.some(tok => item.searchText.includes(tok)));
@@ -973,7 +1084,7 @@ export default function Layout({
       .sort((a, b) => b.score - a.score || a.index - b.index)
       .map(entry => entry.item)
       .slice(0, 18);
-  }, [query, allSearchItems, serverGuideResults]);
+  }, [query, allSearchItems, serverGuideResults, isGeminiPromptSearch]);
 
   const handleSearchResultSelect = (item: GeminiSearchItem, source: 'result' | 'suggestion' = 'result') => {
     if (item.type === 'ticket') {
@@ -1055,8 +1166,15 @@ export default function Layout({
         return 0;
       });
     }
+    const priorityRank: Record<string, number> = { Low: 0, Medium: 1, High: 2, Critical: 3 };
+    sorted.sort((a, b) => {
+      if (ticketSort === 'oldest') return new Date(a.case_created_at).getTime() - new Date(b.case_created_at).getTime();
+      if (ticketSort === 'priority-low') return (priorityRank[a.case_priority] ?? 99) - (priorityRank[b.case_priority] ?? 99);
+      if (ticketSort === 'priority-high') return (priorityRank[b.case_priority] ?? -1) - (priorityRank[a.case_priority] ?? -1);
+      return new Date(b.case_created_at).getTime() - new Date(a.case_created_at).getTime();
+    });
     return sorted;
-  }, [filteredTickets, inboxType, readTicketIds]);
+  }, [filteredTickets, inboxType, readTicketIds, ticketSort]);
 
   const handleAiPanelDragStart = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -1068,7 +1186,11 @@ export default function Layout({
 
     const onMouseMove = (ev: MouseEvent) => {
       if (!aiDragRef.current) return;
-      const nextWidth = Math.max(320, Math.min(640, aiDragRef.current.startWidth + aiDragRef.current.startX - ev.clientX));
+      const availableInlineWidth = Math.max(0, inlineShellWidth - MAIN_MIN_WIDTH_WITH_AI);
+      const maxWidth = Math.max(AI_PANEL_MIN_WIDTH, Math.min(AI_PANEL_MAX_WIDTH, availableInlineWidth));
+      const minWidth = AI_PANEL_MIN_WIDTH;
+      const rawWidth = aiDragRef.current.startWidth + aiDragRef.current.startX - ev.clientX;
+      const nextWidth = Math.max(minWidth, Math.min(maxWidth, rawWidth));
       setAiPanelWidth(nextWidth);
     };
 
@@ -1078,7 +1200,11 @@ export default function Layout({
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
       setIsAiPanelDragging(false);
-      const finalWidth = Math.max(320, Math.min(640, (aiDragRef.current?.startWidth ?? aiPanelWidth) + (aiDragRef.current?.startX ?? ev.clientX) - ev.clientX));
+      const availableInlineWidth = Math.max(0, inlineShellWidth - MAIN_MIN_WIDTH_WITH_AI);
+      const maxWidth = Math.max(AI_PANEL_MIN_WIDTH, Math.min(AI_PANEL_MAX_WIDTH, availableInlineWidth));
+      const minWidth = AI_PANEL_MIN_WIDTH;
+      const rawWidth = (aiDragRef.current?.startWidth ?? aiPanelWidth) + (aiDragRef.current?.startX ?? ev.clientX) - ev.clientX;
+      const finalWidth = Math.max(minWidth, Math.min(maxWidth, rawWidth));
       try { localStorage.setItem('edq_ai_panel_width', String(Math.round(finalWidth))); } catch {}
       aiDragRef.current = null;
     };
@@ -1089,7 +1215,10 @@ export default function Layout({
 
   return (
     <AiPanelContext.Provider value={contextValue}>
-    <div className="flex h-screen w-full overflow-hidden font-sans bg-[#F6F8FC] dark:bg-[#141218] text-on-surface dark:text-inverse-on-surface">
+    <div className={cn(
+      "flex h-screen w-full overflow-hidden font-sans bg-[#F6F8FC] dark:bg-[#141218] text-on-surface dark:text-inverse-on-surface",
+    )}
+    >
 
       {/* NAV RAIL */}
       <motion.aside
@@ -1144,7 +1273,6 @@ export default function Layout({
         <div className="flex flex-col pb-4">
           {[
             { id: 'settings', icon: 'settings', label: 'Settings', onClick: () => onNavigate('settings' as ViewType) },
-            { id: 'help', icon: 'help', label: 'Help', onClick: () => {} },
           ].map(item => {
             const isActive = currentView === item.id;
             return (
@@ -1346,7 +1474,7 @@ export default function Layout({
                 <button
                   type="button"
                   onClick={() => setIsTicketPanelOpen(!isTicketPanelOpen)}
-                  className="flex items-center gap-2 select-none shrink-0 px-2 py-1 -mx-2 rounded-full transition-colors hover:bg-black/5 dark:hover:bg-white/8 cursor-pointer"
+                  className="flex items-center gap-2 select-none shrink-0 px-2 py-1 -mx-2 rounded-full transition-colors hover:bg-black/5 dark:hover:bg-white/8 cursor-pointer whitespace-nowrap"
                 >
                   <span className="material-symbols-outlined text-[#1A73E8] dark:text-[#D2E3FC]" style={{ fontSize: '20px', fontVariationSettings: "'FILL' 1" }}>confirmation_number</span>
                   <span className="text-[16px] font-bold text-[#1D192B] dark:text-[#D2E3FC]">Tickets</span>
@@ -1354,7 +1482,7 @@ export default function Layout({
                 </button>
                 <>
                   <div className="w-px h-5 bg-black/12 dark:bg-white/12 shrink-0" />
-                  <div className="relative flex items-center gap-[3px] overflow-x-auto no-scrollbar py-[6px] px-[6px] rounded-[100px]">
+                  <div className="edq-header-scroll relative flex items-center gap-[3px] overflow-x-auto no-scrollbar py-[6px] px-[6px] rounded-[100px]">
                     {SECTION_TABS.map(tab => {
                       const isActive = activeSection === tab.label;
                       const selectorOn = pillSelectorActive || panelSelectorActive;
@@ -1371,6 +1499,7 @@ export default function Layout({
                               if (panelSelectorActive) {
                                 setPanelPendingChip({ label: tab.label, content: serializeSectionContext(tab.label, ticket), scope: tabScope });
                               }
+                              if (selectorOn) return;
                               onSectionChange(tab.label);
                             }}
                             className={cn(
@@ -1400,7 +1529,7 @@ export default function Layout({
                 </div>
                 <>
                   <div className="w-px h-5 bg-black/12 dark:bg-white/12 shrink-0" />
-                  <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-1">
+                  <div className="edq-header-scroll flex items-center gap-1.5 overflow-x-auto no-scrollbar py-1">
                     {TOOL_TABS.map(tab => {
                       const isActive = tab.id === 'dig' ? toolsTab !== 'ip_warming' : toolsTab === tab.id;
                       return (
@@ -1437,16 +1566,15 @@ export default function Layout({
                 </>
               </div>
             ) : (
-              <div className="flex items-center gap-2 select-none">
+              <div className="flex items-center gap-2 select-none shrink-0 min-w-fit">
                 <span className="material-symbols-outlined text-[#1A73E8] dark:text-[#D2E3FC]" style={{ fontSize: '20px', fontVariationSettings: "'FILL' 1" }}>{VIEW_ICONS[currentView] ?? 'grid_view'}</span>
-                <span className="text-[16px] font-bold text-[#1D192B] dark:text-[#D2E3FC]">{VIEW_LABELS[currentView] ?? 'Dashboard'}</span>
+                <span className="text-[16px] font-bold text-[#1D192B] dark:text-[#D2E3FC] whitespace-nowrap">{VIEW_LABELS[currentView] ?? 'Dashboard'}</span>
               </div>
             )}
           </div>
 
           {/* RIGHT: search (expands inline) + notifications */}
-          <div className={cn("flex items-center gap-0.5 pr-3 ml-2 transition-all duration-200 shrink-0", isSearchExpanded && "w-[340px]")}>
-
+          <div className={cn("flex items-center gap-4 pr-3 ml-2 transition-all duration-200 shrink-0", isSearchExpanded && "w-[340px]")}>
             {/* Search area — inline expanding for investigation/tools */}
             {false && (currentView === 'investigation' || currentView === 'tools') && (
               <motion.div
@@ -1558,7 +1686,13 @@ export default function Layout({
             {NOTIFICATIONS_ENABLED && (
             <button
               ref={notifBtnRef}
-              onClick={() => setShowNotifications(v => { if (!v) setIsAiPanelOpen(false); return !v; })}
+              onClick={() => setShowNotifications(v => {
+                if (!v) {
+                  setAiPanelAutoCollapsed(false);
+                  setIsAiPanelOpen(false);
+                }
+                return !v;
+              })}
               className={cn("p-2 rounded-xl transition-colors shrink-0", showNotifications ? "text-[#1A73E8] dark:text-[#D2E3FC]" : "text-[#49454F] dark:text-white/60 hover:text-[#1A73E8] dark:hover:text-[#D2E3FC]")}
               title="Notifications"
             >
@@ -1756,39 +1890,61 @@ export default function Layout({
                 )}
         </header>
 
-        <div className="flex min-h-0 flex-1 overflow-visible relative">
+        <div ref={inlineShellRef} className="flex min-h-0 flex-1 overflow-visible relative">
         {/* DETAIL PANE */}
-        <main className={cn("flex-1 relative bg-white dark:bg-[#1C1B1F] min-w-0 min-h-0 mt-1 mb-2 flex overflow-hidden rounded-b-[16px] border border-[#E8EAED] dark:border-white/8", (showNotifications || isAiPanelOpen) ? "rounded-tl-[16px] rounded-tr-[16px]" : "rounded-tl-[16px]")}>
+        <main className={cn(
+          "flex-1 min-w-0 relative bg-white dark:bg-[#1C1B1F] min-h-0 mt-1 mb-2 flex overflow-hidden rounded-b-[16px] border border-[#E8EAED] dark:border-white/8",
+          (showNotifications || isAiPanelOpen) ? "rounded-tl-[16px] rounded-tr-[16px]" : "rounded-tl-[16px]"
+        )}
+        >
 
           {/* TICKET PANEL — inside the white investigation panel, flex sibling to content */}
           {currentView === 'investigation' && (
             <>
               <motion.div
-                animate={{ width: isTicketPanelOpen ? panelWidth : 0 }}
-                transition={{ type: 'spring', stiffness: 300, damping: 32 }}
+                initial={false}
+                animate={{ width: effectiveTicketPanelOpen ? panelWidth : 0 }}
+                transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+                style={{ pointerEvents: effectiveTicketPanelOpen ? 'auto' : 'none' }}
                 className="relative h-full shrink-0 overflow-hidden z-10"
 	              >
-	                <div className="h-full overflow-hidden" style={{ width: isTicketPanelOpen ? panelWidth : 0 }}>
+	                <div className="h-full overflow-hidden" style={{ width: panelWidth }}>
 	                  <div
-	                    className="box-border flex h-full flex-col gap-0 overflow-hidden border-r border-[#E8EAED] bg-[#F8F9FA] dark:border-outline-variant/15 dark:bg-[#121115]"
+	                    className="relative box-border flex h-full flex-col gap-0 overflow-hidden border-r border-[#E8EAED] bg-[#F8F9FA] dark:border-outline-variant/15 dark:bg-[#121115]"
 	                    style={{ width: panelWidth }}
 	                  >
                       {/* Ticket search */}
                       <div className="shrink-0 px-3 pb-2 pt-3">
-                        <div className="relative">
-                          <span className="material-symbols-outlined pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[#49454F]/45 dark:text-white/35" style={{ fontSize: '18px' }}>search</span>
-                          <input
-                            type="text"
-                            className="w-full rounded-full border border-transparent bg-[#F1F3F4]/70 py-2.5 pl-9 pr-4 text-[13px] text-[#1D192B] transition-colors placeholder:text-[#49454F]/40 focus:border-[#1A73E8]/15 focus:outline-none dark:bg-white/8 dark:text-white dark:placeholder:text-white/30"
-                            placeholder="Search tickets"
-                            value={ticketSearch}
-                            onChange={e => setTicketSearch(e.target.value)}
-                          />
-                          {ticketSearch && (
-                            <button onClick={() => setTicketSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#49454F]/40 transition-colors hover:text-[#49454F]">
-                              <span className="material-symbols-outlined text-[16px]">close</span>
-                            </button>
-                          )}
+                        <div className="flex items-center gap-2">
+                          <div className="relative min-w-0 flex-1">
+                            <span className="material-symbols-outlined pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[#49454F]/45 dark:text-white/35" style={{ fontSize: '18px' }}>search</span>
+                            <input
+                              type="text"
+                              className="w-full rounded-full border border-transparent bg-[#F1F3F4]/70 py-2.5 pl-9 pr-9 text-[13px] text-[#1D192B] transition-colors placeholder:text-[#49454F]/40 focus:border-[#1A73E8]/15 focus:outline-none dark:bg-white/8 dark:text-white dark:placeholder:text-white/30"
+                              placeholder="Search tickets"
+                              value={ticketSearch}
+                              onChange={e => setTicketSearch(e.target.value)}
+                            />
+                            {ticketSearch && (
+                              <button onClick={() => setTicketSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#49454F]/40 transition-colors hover:text-[#49454F]">
+                                <span className="material-symbols-outlined text-[16px]">close</span>
+                              </button>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            aria-label={isTicketSortMenuOpen ? 'Close ticket filters' : 'Open ticket filters'}
+                            aria-expanded={isTicketSortMenuOpen}
+                            onClick={() => setIsTicketSortMenuOpen(open => !open)}
+                            className={cn(
+                              'flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors focus:outline-none focus-visible:ring-4 focus-visible:ring-[#DADCE0]',
+                              isTicketSortMenuOpen
+                                ? 'bg-[#DADCE0] text-[#3C4043]'
+                                : 'text-[#9AA0A6] hover:bg-[#F1F3F4] hover:text-[#5F6368]'
+                            )}
+                          >
+                            <span className="material-symbols-outlined text-[25px]">filter_list</span>
+                          </button>
                         </div>
                       </div>
 
@@ -1822,6 +1978,45 @@ export default function Layout({
                         })}
                       </div>
 
+                      <AnimatePresence initial={false}>
+                        {isTicketSortMenuOpen && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 'auto', opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.2, ease: [0.2, 0, 0, 1] }}
+                            className="shrink-0 overflow-hidden"
+                          >
+                            <div className="grid grid-cols-2 gap-2 px-3 pb-2 pt-2">
+                              {([
+                                { id: 'newest', label: 'Newest', icon: 'arrow_downward' },
+                                { id: 'priority-low', label: 'Low to High Priority', icon: 'low_priority' },
+                                { id: 'oldest', label: 'Oldest', icon: 'arrow_upward' },
+                                { id: 'priority-high', label: 'High to Low Priority', icon: 'priority_high' },
+                              ] as const).map(option => (
+                                <button
+                                  key={option.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setTicketSort(option.id);
+                                    setIsTicketSortMenuOpen(false);
+                                  }}
+                                  className={cn(
+                                    'flex h-10 min-w-0 items-center gap-2 rounded-full px-3 text-left text-[11.5px] font-semibold transition-colors',
+                                    ticketSort === option.id
+                                      ? 'bg-[#DADCE0] text-[#3C4043]'
+                                      : 'bg-[#F1F3F4] text-[#5F6368] hover:bg-[#E8EAED]'
+                                  )}
+                                >
+                                  <span className="material-symbols-outlined shrink-0 text-[17px]">{option.icon}</span>
+                                  <span className="truncate">{option.label}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+
                       {/* Ticket list */}
                       <div className="flex-1 overflow-y-auto px-3 pb-3 pt-2 custom-scrollbar flex flex-col gap-[2px]">
                         {sortedTickets.map((t, idx) => {
@@ -1846,6 +2041,7 @@ export default function Layout({
                               transition={{ duration: 0.2, delay: idx * 0.03, ease: 'easeOut' }}
                               onClick={() => {
                                 onSelectTicket(t.case_number);
+                                setIsTicketPanelOpen(false);
                               }}
                               className={cn(
                                 "flex w-full cursor-pointer select-none p-[18px_20px] gap-4 transition-colors duration-150 justify-between items-center min-h-[84px]",
@@ -1901,15 +2097,16 @@ export default function Layout({
                           <div className="py-12 text-center text-sm text-[#49454F]/40 select-none">No matching tickets.</div>
                         )}
                       </div>
+
 	                  </div>
 	                </div>
 	              </motion.div>
               {/* Ticket drawer handle — sits on the panel edge, not a large pill. */}
               <motion.button
                 type="button"
-                aria-label={isTicketPanelOpen ? 'Collapse ticket list' : 'Open ticket list'}
-                animate={{ left: isTicketPanelOpen ? panelWidth : 8 }}
-                transition={{ type: 'spring', stiffness: 300, damping: 32 }}
+                aria-label={effectiveTicketPanelOpen ? 'Collapse ticket list' : 'Open ticket list'}
+                animate={{ left: effectiveTicketPanelOpen ? panelWidth : 8 }}
+                transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
                 className="group absolute top-1/2 z-[120] flex h-12 w-5 -translate-x-1/2 -translate-y-1/2 cursor-pointer select-none items-center justify-center bg-transparent"
                 onClick={() => setIsTicketPanelOpen(!isTicketPanelOpen)}
               >
@@ -1924,6 +2121,7 @@ export default function Layout({
             className={cn(
               "app-responsive-scope relative flex-1 min-w-0 min-h-0",
               "overflow-y-auto overflow-x-hidden",
+              effectiveAiPanelWidth > 0 ? "gemini-inline-open" : "gemini-inline-closed",
               (pillSelectorActive || panelSelectorActive) && "gem-selector-active"
             )}
           >
@@ -1933,12 +2131,15 @@ export default function Layout({
 
         {/* AI PANEL DRAWER — MD3 side sheet. Panel slides in/out; container width closes behind it. */}
         <div
-          className={cn("shrink-0 h-full relative", !isAiPanelDragging && "transition-[width] duration-[400ms]")}
+          className={cn(
+            "z-40 h-full min-h-0 overflow-visible",
+            "relative shrink-0",
+            !isAiPanelDragging && "transition-[width] duration-[280ms]"
+          )}
           style={{
-            width: isAiPanelOpen ? aiPanelWidth : 0,
-            transitionTimingFunction: isAiPanelOpen
-              ? 'cubic-bezier(0.05, 0.7, 0.1, 1.0)'   /* MD3 Emphasized Decelerate — enter */
-              : 'cubic-bezier(0.3, 0.0, 0.8, 0.15)',   /* MD3 Emphasized Accelerate — exit  */
+            width: effectiveAiPanelWidth,
+            pointerEvents: (isAiPanelOpen || aiPanelIsLoading) ? 'auto' : 'none',
+            transitionTimingFunction: 'cubic-bezier(0.22, 1, 0.36, 1)',
           }}
         >
           {(isAiPanelOpen || aiPanelIsLoading) && (
@@ -1948,7 +2149,7 @@ export default function Layout({
 	              title="Drag to resize Gemini"
 	              aria-label="Drag to resize Gemini"
 	              initial={false}
-	              animate={{ left: 9 }}
+	              animate={{ left: 12 }}
 	              className="group absolute top-1/2 z-[120] flex h-12 w-5 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize select-none items-center justify-center bg-transparent"
 	            >
 	              <div className="h-12 w-1.5 rounded-full bg-[#CAC4D0]/95 shadow-sm transition-[transform,background-color] duration-200 ease-[cubic-bezier(0.2,0,0,1)] group-hover:scale-y-125 group-hover:bg-[#1A73E8] dark:bg-white/30 dark:group-hover:bg-white/50" />
@@ -1958,19 +2159,23 @@ export default function Layout({
           {(isAiPanelOpen || aiPanelIsLoading) && (
             <motion.div
               key="ai-panel"
-              initial={{ x: '100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '100%' }}
-              transition={{ duration: 0.35, ease: [0.05, 0.7, 0.1, 1.0] }}
+              initial={false}
+              exit={{ opacity: 1 }}
+              transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
               style={{ position: 'absolute', inset: 0 }}
-              className="gemini-exclude pt-1 pb-2 pl-2 pr-2 box-border flex flex-col"
+              // Horizontal gutter preserves the outward glow without reducing
+              // the side sheet's usable vertical height.
+              className="gemini-exclude box-border flex h-full min-h-0 flex-col overflow-visible pb-2 pl-3 pr-3 pt-1"
             >
               <AiPanel
                 isDark={isDark}
                 screenContext={screenContext}
                 chatHistory={aiChatHistory}
                 onUpdateHistory={setAiChatHistory}
-                onClose={() => setIsAiPanelOpen(false)}
+                onClose={() => {
+                  setAiPanelAutoCollapsed(false);
+                  setIsAiPanelOpen(false);
+                }}
                 onOpenArticle={openGuideArticle}
                 selectorActive={panelSelectorActive}
                 onSelectorToggle={setPanelSelectorActive}
