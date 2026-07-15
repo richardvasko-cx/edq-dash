@@ -117,8 +117,39 @@ function validGeneratedPanels(saved: PersistedWorkspace | null): WorkspacePanelI
   return (saved?.autoGen ?? []).filter(id => {
     if (id === 'gettingStarted') return true;
     const content = saved?.state?.[id]?.content?.trim() ?? '';
-    return Boolean(content) && content !== 'No response.' && !content.startsWith('⚠️');
+    const suggestion = saved?.state?.[id]?.suggestion?.trim() ?? '';
+    return Boolean(content) && Boolean(suggestion) && content !== 'No response.' && suggestion !== 'No response.' && !content.startsWith('⚠️') && !suggestion.startsWith('⚠️');
   });
+}
+function hydrateWorkspaceState(saved: PersistedWorkspace | null, suggestions: Record<WorkspacePanelId, string>): WorkspaceState {
+  const initial = initWorkspaceState(suggestions);
+  if (!saved?.state) return initial;
+  const repaired = { ...saved.state } as WorkspaceState;
+  let resetFrom = -1;
+  WORKSPACE_PANELS.forEach(({ id }, index) => {
+    const stored = saved.state[id] ?? initial[id];
+    const storedContent = stored.content?.trim() ?? '';
+    const storedSuggestion = stored.suggestion?.trim() ?? '';
+    const invalidGenerated = id !== 'gettingStarted' && (
+      !storedContent || !storedSuggestion || storedContent === 'No response.' || storedSuggestion === 'No response.' ||
+      storedContent.startsWith('⚠️') || storedSuggestion.startsWith('⚠️')
+    );
+    if (resetFrom < 0 && invalidGenerated && stored.status !== 'locked') resetFrom = index;
+    const content = invalidGenerated ? initial[id].content : storedContent;
+    const suggestion = invalidGenerated ? initial[id].suggestion : storedSuggestion;
+    repaired[id] = { ...stored, content, suggestion };
+  });
+  if (resetFrom >= 0) {
+    WORKSPACE_PANELS.forEach(({ id }, index) => {
+      if (index < resetFrom) return;
+      repaired[id] = {
+        ...repaired[id],
+        status: index === resetFrom ? 'current' : 'locked',
+        excludeReason: undefined,
+      };
+    });
+  }
+  return repaired;
 }
 function savedInformationGateIsCurrent(saved: PersistedWorkspace | null) {
   return saved?.informationGateVersion === INFORMATION_GATE_VERSION;
@@ -735,7 +766,7 @@ export default function WorkspacePanels({ ticket, onJumpSection, onJumpPanel }: 
   const suggestions = useMemo(() => buildWorkspaceSuggestions(ticket), [ticket]);
   // Rehydrate from sessionStorage so the flow resumes exactly where the user left
   // off after navigating away and back; fall back to a fresh flow when none saved.
-  const [state, setState] = useState<WorkspaceState>(() => loadWorkspace(ticket?.case_number)?.state ?? initWorkspaceState(suggestions));
+  const [state, setState] = useState<WorkspaceState>(() => hydrateWorkspaceState(loadWorkspace(ticket?.case_number), suggestions));
 
   const [editingId, setEditingId] = useState<WorkspacePanelId | null>(null);
   const [copiedPanelId, setCopiedPanelId] = useState<WorkspacePanelId | null>(null);
@@ -812,7 +843,7 @@ export default function WorkspacePanels({ ticket, onJumpSection, onJumpPanel }: 
   useEffect(() => {
     const saved = loadWorkspace(ticket?.case_number);
     const infoGateCurrent = savedInformationGateIsCurrent(saved);
-    setState(saved?.state ?? initWorkspaceState(suggestions));
+    setState(hydrateWorkspaceState(saved, suggestions));
     setResolution(saved?.resolution ?? null);
     setConsultantEvidence(infoGateCurrent ? saved?.consultantEvidence ?? [] : []);
     setInformationGateComplete(infoGateCurrent ? saved?.informationGateComplete ?? false : false);
