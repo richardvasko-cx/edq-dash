@@ -83,25 +83,18 @@ const SES_LABELS: Record<string, string> = {
   rendering_failure: 'Rendering Failures',
 };
 
-type Section = 'connections' | 'dashboard' | 'about';
+type Section = 'gemini' | 'connections' | 'about';
 
 export default function SettingsView({ onNavigate }: { onNavigate: (v: ViewType) => void }) {
-  const [section, setSection] = useState<Section>('connections');
+  const [section, setSection] = useState<Section>('gemini');
 
   const sp = useProviderData('sparkpost');
   const sg = useProviderData('sendgrid');
   const ses = useProviderData('ses');
 
-  const [pollingEnabled, setPollingEnabled] = useState(() => {
-    try { return localStorage.getItem('edq_polling_enabled') !== 'false'; } catch { return true; }
-  });
-  const [hudCompact, setHudCompact] = useState(() => {
-    try { return localStorage.getItem('edq_hud_compact') === 'true'; } catch { return false; }
-  });
-
-  const navItems: { id: Section; icon: string; label: string }[] = [
+  const navItems: { id: Section; icon?: string; label: string; gemini?: boolean }[] = [
+    { id: 'gemini', label: 'Gemini', gemini: true },
     { id: 'connections', icon: 'cable', label: 'Connections' },
-    { id: 'dashboard', icon: 'dashboard_customize', label: 'Dashboard' },
     { id: 'about', icon: 'info', label: 'About' },
   ];
 
@@ -122,10 +115,14 @@ export default function SettingsView({ onNavigate }: { onNavigate: (v: ViewType)
               )}
             >
               <div className="flex items-center gap-3 font-semibold text-[13px]">
-                <span
-                  className="material-symbols-outlined text-[18px] text-on-surface-variant group-hover:text-[#1A73E8] dark:group-hover:text-[#D2E3FC]"
-                  style={{ fontVariationSettings: section === item.id ? "'FILL' 1" : '' }}
-                >{item.icon}</span>
+                {item.gemini ? (
+                  <GeminiIcon className="w-[18px] h-[18px] shrink-0" />
+                ) : (
+                  <span
+                    className="material-symbols-outlined text-[18px] text-on-surface-variant group-hover:text-[#1A73E8] dark:group-hover:text-[#D2E3FC]"
+                    style={{ fontVariationSettings: section === item.id ? "'FILL' 1" : '' }}
+                  >{item.icon}</span>
+                )}
                 <span>{item.label}</span>
               </div>
               <span className={cn(
@@ -139,14 +136,9 @@ export default function SettingsView({ onNavigate }: { onNavigate: (v: ViewType)
 
       {/* Content — white background, panels are grey */}
       <div className="flex-1 overflow-y-auto p-8 bg-white dark:bg-[#1C1B1F]">
+        {section === 'gemini' && <GeminiSection />}
         {section === 'connections' && (
           <ConnectionsSection sp={sp} sg={sg} ses={ses} />
-        )}
-        {section === 'dashboard' && (
-          <DashboardSection
-            pollingEnabled={pollingEnabled} setPollingEnabled={setPollingEnabled}
-            hudCompact={hudCompact} setHudCompact={setHudCompact}
-          />
         )}
         {section === 'about' && <AboutSection />}
       </div>
@@ -186,6 +178,19 @@ function ConnectionsSection({ sp, sg, ses }: { sp: ReturnType<typeof useProvider
         metricLabels={SES_LABELS}
         {...ses}
       />
+    </div>
+  );
+}
+
+function GeminiSection() {
+  return (
+    <div className="max-w-3xl space-y-8">
+      <div>
+        <h1 className="text-xl font-bold text-on-surface dark:text-inverse-on-surface">Gemini</h1>
+        <p className="text-sm text-on-surface-variant dark:text-inverse-on-surface/60 mt-1">
+          Model configuration, runtime availability, and server refresh controls.
+        </p>
+      </div>
       <SettingsGroup label="AI">
         <GeminiAPIRow />
       </SettingsGroup>
@@ -325,56 +330,6 @@ function ProviderRow({
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-// ── Dashboard settings ─────────────────────────────────────────────────────
-
-function DashboardSection({
-  pollingEnabled, setPollingEnabled, hudCompact, setHudCompact,
-}: {
-  pollingEnabled: boolean; setPollingEnabled: (v: boolean) => void;
-  hudCompact: boolean; setHudCompact: (v: boolean) => void;
-}) {
-  return (
-    <div className="max-w-2xl space-y-8">
-      <div>
-        <h1 className="text-xl font-bold text-on-surface dark:text-inverse-on-surface">Dashboard</h1>
-        <p className="text-sm text-on-surface-variant dark:text-inverse-on-surface/60 mt-1">UI behaviour and data refresh preferences.</p>
-      </div>
-      <SettingsGroup label="Data">
-        <SettingRow
-          label="Auto-Refresh Tick"
-          desc="Poll the webhook endpoint every 3 seconds"
-          control={
-            <Toggle value={pollingEnabled} onChange={v => {
-              setPollingEnabled(v);
-              try { localStorage.setItem('edq_polling_enabled', String(v)); } catch {}
-            }} />
-          }
-        />
-        <SettingRow
-          label="CSV / JSON Stream Parser"
-          desc="High-speed Looker data matching"
-          control={<StatusChip label="Enabled" />}
-        />
-      </SettingsGroup>
-      <SettingsGroup label="Layout">
-        <SettingRow
-          label="Compact HUD Layout"
-          desc="Synthesise dense grid tables in ticket view"
-          control={
-            <Toggle value={hudCompact} onChange={v => {
-              setHudCompact(v);
-              try {
-                localStorage.setItem('edq_hud_compact', String(v));
-                window.dispatchEvent(new Event('storage'));
-              } catch {}
-            }} />
-          }
-        />
-      </SettingsGroup>
     </div>
   );
 }
@@ -641,7 +596,6 @@ function AboutSection() {
     <div className="max-w-2xl space-y-8">
       <div>
         <h1 className="text-xl font-bold text-on-surface dark:text-inverse-on-surface">About</h1>
-        <p className="text-sm text-on-surface-variant dark:text-inverse-on-surface/60 mt-1">EDQ Dashboard — Deliverability Pro & Analytics</p>
       </div>
       <SettingsGroup label="Build">
         <SettingRow label="Version" desc="Prototype" control={<span className="text-xs font-mono text-on-surface-variant">v0.1.0</span>} />

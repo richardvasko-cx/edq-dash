@@ -2044,30 +2044,30 @@ export default function Layout({
                                 setIsTicketPanelOpen(false);
                               }}
                               className={cn(
-                                "flex w-full cursor-pointer select-none p-[18px_20px] gap-4 transition-colors duration-150 justify-between items-center min-h-[84px]",
+                                "group flex w-full cursor-pointer select-none p-[18px_20px] gap-4 transition-colors duration-150 justify-between items-center min-h-[84px]",
                                 roundedClass,
                                 isSelected
                                   ? "bg-[#1A73E8] text-white"
-                                  : "bg-[#EEF4FF] dark:bg-[#1E2A40] hover:bg-[#D2E3FC] dark:hover:bg-[#1E3358] active:bg-[#C6DAFC] dark:active:bg-[#1A3070]"
+                                  : "bg-[#F1F3F4] dark:bg-[#2B2D31] hover:bg-[#1A73E8] dark:hover:bg-[#1A73E8] active:bg-[#1967D2] dark:active:bg-[#1967D2]"
                               )}
                               style={{ fontFamily: "'Google Sans', 'Google Sans Text', Roboto, sans-serif" }}
                             >
                               <div className="flex flex-col min-w-0 flex-1">
                                 <h4 className={cn(
                                   "text-[15.5px] font-medium truncate leading-tight",
-                                  isSelected ? "text-white" : "text-on-surface dark:text-[#E6E1E5]"
+                                  isSelected ? "text-white" : "text-on-surface group-hover:text-white dark:text-[#E6E1E5]"
                                 )}>
                                   {t.account_name}
                                 </h4>
                                 <p className={cn(
                                   "text-[14px] font-medium mt-1.5 truncate leading-snug",
-                                  isSelected ? "text-white/90" : "text-on-surface-variant dark:text-[#CAC4D0]"
+                                  isSelected ? "text-white/90" : "text-on-surface-variant group-hover:text-white/90 dark:text-[#CAC4D0]"
                                 )}>
                                   {t.case_subject}
                                 </p>
                                 <p className={cn(
                                   "text-[13.5px] font-semibold mt-1 truncate",
-                                  isSelected ? "text-white/75" : "text-on-surface-variant/70 dark:text-white/40"
+                                  isSelected ? "text-white/75" : "text-on-surface-variant/70 group-hover:text-white/75 dark:text-white/40"
                                 )}>
                                   {t.case_number} · {t.case_priority}
                                 </p>
@@ -2075,7 +2075,7 @@ export default function Layout({
                               <div className="shrink-0 flex flex-col items-end gap-1.5 self-start mt-0.5">
                                 <span className={cn(
                                   "text-[12.5px] font-medium",
-                                  isSelected ? "text-white" : "text-on-surface-variant dark:text-white/40"
+                                  isSelected ? "text-white" : "text-on-surface-variant group-hover:text-white dark:text-white/40"
                                 )}>
                                   {formatCaseDate(t.case_created_at)}
                                 </span>

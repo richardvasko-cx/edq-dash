@@ -163,7 +163,7 @@ export interface CaseRecord {
   contract_end_date: string;
   macro_classification: string;
   industry_rollup: string;
-  current_carr_gbp: number;
+  current_carr_usd: number;
   // ── Case ───────────────────────────────────────────────────────────────
   case_number: string; // canonical 8-char numeric STRING
   contact_name: string; // first name only
@@ -323,7 +323,7 @@ export function parseCaseDataset(csvText: string): DatasetParseResult {
       contract_end_date: get('contract_end_date'),
       macro_classification: get('macro_classification'),
       industry_rollup: get('industry_rollup'),
-      current_carr_gbp: num(get('current_carr_gbp')),
+      current_carr_usd: num(get('current_carr_usd')),
       case_number: caseNumber,
       contact_name: get('contact_name'),
       contact_email: get('contact_email'),

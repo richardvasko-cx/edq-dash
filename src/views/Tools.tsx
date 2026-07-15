@@ -15,6 +15,30 @@ const DIG_PLACEHOLDERS = [
 
 const TOOLS_ANCHOR_OFFSET = 78;
 
+type MxCheckStatus = 'critical' | 'warning' | 'info' | 'success';
+
+interface MxCheck {
+  id: string;
+  status: MxCheckStatus;
+  title: string;
+  detail?: string;
+  helpUrl?: string;
+}
+
+interface MxReport {
+  domain: string;
+  summary: string;
+  checks: MxCheck[];
+  mxRecords: Array<{ priority: number; host: string }>;
+  hasCritical: boolean;
+  hasWarnings: boolean;
+}
+
+function normaliseDomain(host: string) {
+  const value = host.trim().replace(/^https?:\/\//i, '').split('/')[0].replace(/\.$/, '');
+  return value.replace(/^www\./i, '');
+}
+
 function getScrollParent(element: HTMLElement | null): HTMLElement | Window {
   let parent = element?.parentElement ?? null;
   while (parent) {
@@ -260,38 +284,25 @@ export default function Tools({ activeTab }: ToolsProps) {
 
   const getRecordTypeName = dnsTypeName;
   // MX State
-  const [mxResult, setMxResult] = useState<any[] | null>(null);
+  const [mxResult, setMxResult] = useState<MxReport | null>(null);
   const [mxLoading, setMxLoading] = useState(false);
+  const [mxError, setMxError] = useState('');
+  const [expandedMxCheck, setExpandedMxCheck] = useState<string | null>(null);
 
   const runMX = async () => {
     if (!targetHost) return;
     setMxLoading(true);
-
-    let lookupTarget = targetHost.trim();
-    try {
-      if (lookupTarget.startsWith('http://') || lookupTarget.startsWith('https://')) {
-        const urlObj = new URL(lookupTarget);
-        lookupTarget = urlObj.hostname;
-      } else if (lookupTarget.includes('/')) {
-        lookupTarget = lookupTarget.split('/')[0];
-      }
-    } catch (e) { }
+    setMxError('');
+    setMxResult(null);
+    setExpandedMxCheck(null);
 
     try {
-      const lookup = await resolveGoogleDns(lookupTarget, 'MX');
-      if (lookup.answers?.length) {
-        const parsed = lookup.answers.map((ans: any) => {
-          const parts = ans.data.split(' ');
-          const priority = parseInt(parts[0], 10);
-          const host = parts[1];
-          return { priority, host, ip: 'Auto Resolved', status: 'OK' };
-        }).sort((a: any, b: any) => a.priority - b.priority);
-        setMxResult(parsed);
-      } else {
-        setMxResult([]);
-      }
-    } catch (e) {
-      setMxResult([]);
+      const response = await fetch(`/api/google-checkmx?domain=${encodeURIComponent(normaliseDomain(targetHost))}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Google CheckMX request failed.');
+      setMxResult(data.report as MxReport);
+    } catch (error: any) {
+      setMxError(error?.message || 'Google CheckMX request failed.');
     } finally {
       setMxLoading(false);
     }
@@ -386,7 +397,7 @@ export default function Tools({ activeTab }: ToolsProps) {
                   </nav>
                 </motion.div>
 
-              <motion.section ref={digRef} data-key="dig" id="tool-dig" data-gem-panel data-gem-panel-label="DNS Lookup Results" data-gem-panel-content={digResult ? `DNS Lookup Results for ${targetHost}:\n${digResult.map((r: any) => `${r.name} ${r.TTL} IN ${getRecordTypeName(r.type)} ${r.data}`).join('\n')}` : 'DNS Lookup Results — run a lookup to see data'} className="scroll-mt-[78px] bg-white dark:bg-inverse-surface rounded-xl shadow-none border border-[#1A73E8]/15 dark:border-outline-variant/10 p-6 md:p-8 duration-300" {...md3Enter} transition={{ duration: 0.38, ease: md3Ease, delay: 0.04 }}>
+              <motion.section ref={digRef} data-key="dig" id="tool-dig" data-gem-panel data-gem-panel-label="DNS Lookup Results" data-gem-panel-content={digResult ? `DNS Lookup Results for ${targetHost}:\n${digResult.map((r: any) => `${r.name} ${r.TTL} IN ${getRecordTypeName(r.type)} ${r.data}`).join('\n')}` : 'DNS Lookup Results — run a lookup to see data'} className="scroll-mt-[78px] bg-white p-6 duration-300 dark:bg-inverse-surface md:p-8" {...md3Enter} transition={{ duration: 0.38, ease: md3Ease, delay: 0.04 }}>
                 <motion.div
                   className="flex flex-col gap-6 mb-8"
                   {...md3Enter}
@@ -509,112 +520,141 @@ export default function Tools({ activeTab }: ToolsProps) {
             
 
             {/* MX Tool Module */}
-              <motion.section ref={mxRef} data-key="mx" id="tool-mx" data-gem-panel data-gem-panel-label="MX Record Analysis" data-gem-panel-content={mxResult ? `MX Record Analysis for ${targetHost}:\n${mxResult.map((mx: any) => `Priority ${mx.priority}: ${mx.host} — ${mx.status}`).join('\n')}` : 'MX Record Analysis — run a lookup to see data'} className="scroll-mt-[78px] bg-white dark:bg-inverse-surface rounded-xl shadow-none border border-[#1A73E8]/15 dark:border-outline-variant/10 p-6 md:p-8 duration-300" {...md3Enter} transition={{ duration: 0.38, ease: md3Ease, delay: 0.1 }}>
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                  <motion.div
-                    className="lg:col-span-1 space-y-4"
-                    {...md3Enter}
-                    transition={{ duration: 0.32, ease: md3Ease, delay: 0.14 }}
-                  >
-                    <div>
-                      <label className="block text-xs font-bold text-on-surface-variant dark:text-inverse-on-surface/80 mb-2">Target Domain</label>
-                      <div className="flex gap-2">
-                        <input 
-                          className="w-full bg-surface dark:bg-primary/5 dark:text-inverse-on-surface border border-outline-variant dark:border-outline-variant/20 rounded-lg px-4 py-2 focus:outline-none focus:border-primary transition-all text-base" 
-                          type="text" 
-                          value={targetHost}
-                          onChange={e => setTargetHost(e.target.value)}
-                          onKeyDown={e => e.key === 'Enter' && runMX()}
-                          placeholder="e.g., braze.com"
-                        />
-                        <motion.button 
-                          whileHover={{ scale: 1.05 }} 
-                          whileTap={{ scale: 0.95 }} 
-                          onClick={runMX}
-                          disabled={mxLoading}
-                          className="bg-secondary text-white px-4 py-2 rounded-lg hover:bg-secondary/90 transition-colors flex items-center justify-center disabled:opacity-50"
-                        >
-                          <span className={cn("material-symbols-outlined", mxLoading && "animate-spin")}>sync</span>
-                        </motion.button>
-                      </div>
+              <motion.section ref={mxRef} data-key="mx" id="tool-mx" data-gem-panel data-gem-panel-label="Google CheckMX report" data-gem-panel-content={mxResult ? `Google CheckMX report for ${mxResult.domain}:\n${mxResult.checks.map(check => `${check.status}: ${check.title}`).join('\n')}` : 'Google CheckMX report — enter a domain to run the Google checks'} className="scroll-mt-[78px] bg-white p-6 duration-300 dark:bg-inverse-surface md:p-8" {...md3Enter} transition={{ duration: 0.38, ease: md3Ease, delay: 0.1 }}>
+                <div className="mx-auto max-w-5xl">
+                  <div className="mb-8 flex flex-col gap-3 sm:flex-row sm:items-end">
+                    <div className="min-w-0 flex-1">
+                      <label className="mb-2 block text-xs font-bold text-on-surface-variant dark:text-inverse-on-surface/80">Domain name</label>
+                      <input
+                        className="w-full rounded-xl border border-outline-variant bg-surface px-4 py-3 text-base text-on-surface transition-all focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/15 dark:border-outline-variant/20 dark:bg-primary/5 dark:text-inverse-on-surface"
+                        type="text"
+                        value={targetHost}
+                        onChange={e => setTargetHost(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && runMX()}
+                        placeholder="example.com"
+                      />
                     </div>
-                    {mxResult && mxResult.length > 0 && (
-                      <div className="bg-surface-purple dark:bg-primary/10 p-4 rounded-lg border border-primary-fixed dark:border-primary/30">
-                        <h4 className="text-sm font-bold text-primary dark:text-primary-fixed mb-2">Health Score</h4>
-                        <div className="flex items-end gap-2">
-                          <span className="text-5xl font-bold text-on-surface dark:text-inverse-on-surface leading-none">100</span>
-                          <span className="text-base font-bold text-outline dark:text-inverse-on-surface/50 mb-1">/ 100</span>
-                        </div>
-                        <div className="w-full bg-surface-variant dark:bg-primary/20 h-2 rounded-full mt-3 overflow-hidden">
-                          <div className="bg-primary h-full w-[100%] rounded-full"></div>
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={runMX}
+                      disabled={mxLoading || !targetHost.trim()}
+                      className="flex h-[50px] items-center justify-center gap-2 rounded-xl bg-primary px-6 text-sm font-bold text-white transition-colors hover:bg-primary/90 disabled:opacity-50"
+                    >
+                      <span className={cn('material-symbols-outlined text-[18px]', mxLoading && 'animate-spin')}>{mxLoading ? 'sync' : 'search'}</span>
+                      {mxLoading ? 'Checking Google CheckMX' : 'Check domain'}
+                    </motion.button>
+                  </div>
+
+                  {mxError && <p className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">{mxError}</p>}
+
+                  {mxResult ? (
+                    <div className="space-y-5">
+                      <div className={cn(
+                        'rounded-2xl border p-5 sm:p-6',
+                        mxResult.hasCritical
+                          ? 'border-red-200 bg-red-50/60 dark:border-red-900/50 dark:bg-red-950/20'
+                          : mxResult.hasWarnings
+                            ? 'border-amber-200 bg-amber-50/60 dark:border-amber-900/50 dark:bg-amber-950/20'
+                            : 'border-emerald-200 bg-emerald-50/60 dark:border-emerald-900/50 dark:bg-emerald-950/20'
+                      )}>
+                        <div className="flex items-start gap-3">
+                          <MxStatusIcon status={mxResult.hasCritical ? 'critical' : mxResult.hasWarnings ? 'warning' : 'success'} large />
+                          <div>
+                            <h2 className="text-2xl font-black tracking-tight text-on-surface dark:text-inverse-on-surface">{mxResult.domain}</h2>
+                            <p className="mt-2 max-w-3xl text-sm leading-relaxed text-on-surface-variant dark:text-inverse-on-surface/70">{mxResult.summary}</p>
+                          </div>
                         </div>
                       </div>
-                    )}
-                  </motion.div>
-                  
-                  <motion.div
-                    className="lg:col-span-2"
-                    {...md3Enter}
-                    transition={{ duration: 0.32, ease: md3Ease, delay: 0.18 }}
-                  >
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left border-collapse">
-                        <thead>
-                          <tr className="border-b border-outline-variant/50 dark:border-outline-variant/20">
-                            <th className="py-3 px-4 text-xs font-bold text-on-surface-variant dark:text-inverse-on-surface/80">Priority</th>
-                            <th className="py-3 px-4 text-xs font-bold text-on-surface-variant dark:text-inverse-on-surface/80">Hostname</th>
-                            <th className="py-3 px-4 text-xs font-bold text-on-surface-variant dark:text-inverse-on-surface/80">IP Address</th>
-                            <th className="py-3 px-4 text-xs font-bold text-on-surface-variant dark:text-inverse-on-surface/80">Status</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {mxResult ? (
-                            mxResult.length > 0 ? mxResult.map((mx, i) => (
-                              <MXRow key={i} priority={mx.priority} host={mx.host} ip={mx.ip} status={mx.status} />
-                            )) : (
-                              <tr>
-                                <td colSpan={4} className="py-8 text-center text-on-surface-variant dark:text-inverse-on-surface/50">No MX records found.</td>
-                              </tr>
-                            )
-                          ) : (
-                            <tr>
-                              <td colSpan={4} className="py-8 text-center text-on-surface-variant dark:text-inverse-on-surface/50">Enter a domain to check MX records.</td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
+
+                      <div className="overflow-hidden rounded-2xl border border-outline-variant/50 bg-white dark:border-white/10 dark:bg-[#242229]">
+                        <div className="border-b border-outline-variant/35 px-5 py-4 dark:border-white/10">
+                          <h3 className="text-sm font-black text-on-surface dark:text-inverse-on-surface">Google CheckMX results</h3>
+                          <p className="mt-1 text-xs text-on-surface-variant dark:text-inverse-on-surface/60">Live results from Google Admin Toolbox CheckMX.</p>
+                        </div>
+                        <div className="divide-y divide-outline-variant/30 dark:divide-white/8">
+                          {mxResult.checks.map(check => {
+                            const expanded = expandedMxCheck === check.id;
+                            const canExpand = Boolean(check.detail);
+                            return (
+                              <div key={check.id}>
+                                <button
+                                  type="button"
+                                  onClick={() => canExpand && setExpandedMxCheck(expanded ? null : check.id)}
+                                  className={cn('grid w-full grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-3 px-5 py-4 text-left', canExpand && 'transition-colors hover:bg-surface-container-low dark:hover:bg-white/[0.04]')}
+                                  aria-expanded={canExpand ? expanded : undefined}
+                                >
+                                  <MxStatusIcon status={check.status} />
+                                  <span className={cn('text-sm font-semibold leading-snug', check.status === 'critical' ? 'text-red-700 dark:text-red-300' : 'text-on-surface dark:text-inverse-on-surface')}>
+                                    {check.title}
+                                  </span>
+                                  <span className="flex items-center gap-3">
+                                    {check.helpUrl && (
+                                      <a href={check.helpUrl} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()} className="hidden text-xs font-bold text-primary hover:underline sm:inline">Help article</a>
+                                    )}
+                                    {canExpand && <span className="material-symbols-outlined text-[18px] text-on-surface-variant">{expanded ? 'expand_less' : 'expand_more'}</span>}
+                                  </span>
+                                </button>
+                                {expanded && check.detail && <div className="mx-5 mb-4 rounded-xl border border-amber-200/70 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100">{check.detail}</div>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {mxResult.mxRecords.length > 0 && (
+                        <div className="rounded-2xl border border-outline-variant/50 p-5 dark:border-white/10">
+                          <h3 className="text-sm font-black text-on-surface dark:text-inverse-on-surface">Mail exchangers</h3>
+                          <div className="mt-3 overflow-x-auto">
+                            <table className="w-full min-w-[420px] text-left text-sm">
+                              <thead className="text-xs text-on-surface-variant dark:text-inverse-on-surface/60"><tr><th className="pb-2 font-bold">Priority</th><th className="pb-2 font-bold">Hostname</th></tr></thead>
+                              <tbody className="divide-y divide-outline-variant/25 dark:divide-white/8">{mxResult.mxRecords.map(record => <tr key={`${record.priority}-${record.host}`}><td className="py-2.5 font-mono text-primary">{record.priority}</td><td className="py-2.5 font-medium text-on-surface dark:text-inverse-on-surface">{record.host}</td></tr>)}</tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </motion.div>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-outline-variant/70 px-6 py-12 text-center dark:border-white/15">
+                      <span className="material-symbols-outlined text-[32px] text-primary">mark_email_read</span>
+                      <h3 className="mt-3 text-base font-black text-on-surface dark:text-inverse-on-surface">Run Google CheckMX</h3>
+                      <p className="mx-auto mt-1 max-w-md text-sm leading-relaxed text-on-surface-variant dark:text-inverse-on-surface/60">Enter a domain to inspect the live Google CheckMX mail-flow, SPF, MX, DKIM, DMARC, and DNS checks.</p>
+                    </div>
+                  )}
                 </div>
               </motion.section>
 
             
 
             {/* Analyzer Module */}
-              <motion.section ref={analyzerRef} data-key="analyzer" id="tool-analyzer" data-gem-panel data-gem-panel-label="Header Analysis Results" data-gem-panel-content={headerAnalysis ? `Header Analysis:\n${JSON.stringify(headerAnalysis, null, 2).slice(0, 2000)}` : 'Header Analysis — paste and analyze a header to see data'} className="scroll-mt-[78px] bg-white dark:bg-[#1E1D22] rounded-2xl shadow-none border border-outline-variant/50 dark:border-white/8 overflow-hidden" {...md3Enter} transition={{ duration: 0.38, ease: md3Ease, delay: 0.16 }}>
-                {/* Section header */}
-                <div className="flex items-center gap-2.5 px-5 py-3.5 border-b border-outline-variant/20 dark:border-white/8 bg-surface-container-low dark:bg-[#28272C]">
-                  <span className="material-symbols-outlined text-primary dark:text-[#D2E3FC]" style={{ fontSize: '20px', fontVariationSettings: "'FILL' 1" }}>data_object</span>
-                  <h2 className="font-bold text-[15px] text-on-surface dark:text-inverse-on-surface">Message Header Analyzer</h2>
-                </div>
-                <div className="p-5 grid grid-cols-1 lg:grid-cols-2 gap-5">
+              <motion.section ref={analyzerRef} data-key="analyzer" id="tool-analyzer" data-gem-panel data-gem-panel-label="Header Analysis Results" data-gem-panel-content={headerAnalysis ? `Header Analysis:\n${JSON.stringify(headerAnalysis, null, 2).slice(0, 2000)}` : 'Header Analysis — paste and analyze a header to see data'} className="scroll-mt-[78px] bg-white p-6 duration-300 dark:bg-inverse-surface md:p-8" {...md3Enter} transition={{ duration: 0.38, ease: md3Ease, delay: 0.16 }}>
+                <div className="mx-auto max-w-5xl">
+                  <div className="mb-8 flex items-center gap-3">
+                    <span className="material-symbols-outlined text-primary" style={{ fontSize: '24px', fontVariationSettings: "'FILL' 1" }}>data_object</span>
+                    <div>
+                      <h2 className="text-lg font-black text-on-surface dark:text-inverse-on-surface">Message Header Analyzer</h2>
+                      <p className="mt-0.5 text-xs text-on-surface-variant dark:text-inverse-on-surface/60">Inspect message authentication and routing signals from raw headers.</p>
+                    </div>
+                  </div>
+                <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
                   {/* Input column */}
                   <motion.div
                     className="flex flex-col gap-3"
                     {...md3Enter}
                     transition={{ duration: 0.32, ease: md3Ease, delay: 0.2 }}
                   >
-                    <label className="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant dark:text-white/50">Paste Raw Headers</label>
+                    <label className="text-xs font-bold text-on-surface-variant dark:text-inverse-on-surface/80">Paste raw headers</label>
                     <textarea
-                      className="w-full flex-1 min-h-[280px] bg-surface-container-low dark:bg-[#28272C] dark:text-inverse-on-surface border border-outline-variant/60 dark:border-white/12 rounded-xl p-4 font-mono text-sm focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 transition-all resize-none placeholder:text-on-surface-variant/40"
+                      className="min-h-[300px] w-full flex-1 resize-none rounded-2xl border border-outline-variant/60 bg-surface p-4 font-mono text-sm text-on-surface transition-all placeholder:text-on-surface-variant/40 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/15 dark:border-white/12 dark:bg-primary/5 dark:text-inverse-on-surface"
                       placeholder={"Return-Path: <bounce@example.com>\nReceived: from mail.example.com...\nX-Mailer: Braze"}
                       value={headerInput}
                       onChange={e => setHeaderInput(e.target.value)}
                     />
                     <button
                       onClick={analyzeHeaders}
-                      className="w-full bg-primary hover:bg-primary/90 active:scale-[0.98] text-white px-6 py-2.5 rounded-xl text-sm font-bold transition-all"
+                      className="flex h-[50px] w-full items-center justify-center gap-2 rounded-xl bg-primary px-6 text-sm font-bold text-white transition-all hover:bg-primary/90 active:scale-[0.98]"
                     >
+                      <span className="material-symbols-outlined text-[18px]">analytics</span>
                       Analyze Headers
                     </button>
                   </motion.div>
@@ -626,10 +666,10 @@ export default function Tools({ activeTab }: ToolsProps) {
                       {...md3Enter}
                       transition={{ duration: 0.32, ease: md3Ease, delay: 0.24 }}
                     >
-                      <label className="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant dark:text-white/50">Analysis Results</label>
+                      <label className="text-xs font-bold text-on-surface-variant dark:text-inverse-on-surface/80">Analysis results</label>
                       {/* Metadata rows */}
                       <motion.div
-                        className="bg-surface-container-low dark:bg-[#28272C] rounded-xl border border-[#1A73E8]/15 dark:border-white/8 divide-y divide-outline-variant/15 dark:divide-white/6"
+                        className="divide-y divide-outline-variant/15 rounded-2xl border border-outline-variant/50 bg-white dark:divide-white/6 dark:border-white/10 dark:bg-[#242229]"
                         {...md3Enter}
                         transition={{ duration: 0.3, ease: md3Ease, delay: 0.28 }}
                       >
@@ -672,7 +712,7 @@ export default function Tools({ activeTab }: ToolsProps) {
                       </motion.div>
                       {/* Routing hops */}
                       <motion.div
-                        className="bg-surface-container-low dark:bg-[#28272C] rounded-xl border border-[#1A73E8]/15 dark:border-white/8 px-4 py-3 flex items-center justify-between"
+                        className="flex items-center justify-between rounded-2xl border border-outline-variant/50 bg-white px-4 py-3 dark:border-white/10 dark:bg-[#242229]"
                         {...md3Enter}
                         transition={{ duration: 0.3, ease: md3Ease, delay: 0.36 }}
                       >
@@ -687,19 +727,20 @@ export default function Tools({ activeTab }: ToolsProps) {
                     </motion.div>
                   ) : (
                     <motion.div
-                      className="bg-surface-container-low dark:bg-[#28272C] rounded-xl border border-[#1A73E8]/15 dark:border-white/8 flex flex-col justify-center items-center text-center p-8 gap-4"
+                      className="flex min-h-[300px] flex-col items-center justify-center gap-4 rounded-2xl border border-dashed border-outline-variant/70 px-8 py-12 text-center dark:border-white/15"
                       {...md3Enter}
                       transition={{ duration: 0.32, ease: md3Ease, delay: 0.24 }}
                     >
-                      <div className="w-14 h-14 bg-surface-container-highest dark:bg-white/8 rounded-full flex items-center justify-center">
-                        <span className="material-symbols-outlined text-[28px] text-on-surface-variant/50">analytics</span>
+                      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[#E8F0FE] dark:bg-primary/15">
+                        <span className="material-symbols-outlined text-[28px] text-primary">analytics</span>
                       </div>
                       <div>
-                        <h3 className="text-[15px] font-bold text-on-surface dark:text-inverse-on-surface mb-1">Awaiting Headers</h3>
-                        <p className="text-[13px] text-on-surface-variant dark:text-white/50 max-w-[240px]">Paste raw email headers and click Analyze to extract SPF, DKIM, DMARC, and routing data.</p>
+                        <h3 className="mb-1 text-[15px] font-black text-on-surface dark:text-inverse-on-surface">Awaiting headers</h3>
+                        <p className="mx-auto max-w-[260px] text-[13px] leading-relaxed text-on-surface-variant dark:text-white/50">Paste raw email headers and analyze them to extract SPF, DKIM, DMARC, and routing data.</p>
                       </div>
                     </motion.div>
                   )}
+                </div>
                 </div>
               </motion.section>
               </div>
@@ -712,23 +753,8 @@ export default function Tools({ activeTab }: ToolsProps) {
   );
 }
 
-function MXRow({ priority, host, ip, status }: { key?: React.Key, priority: number, host: string, ip: string, status: string }) {
-  const isOk = status === 'OK';
-  return (
-    <tr className="border-b border-surface-variant dark:border-outline-variant/10 hover:bg-surface-purple dark:hover:bg-primary/5 transition-colors">
-      <td className={cn("py-4 px-4 text-base font-bold", isOk ? "text-primary dark:text-primary-fixed": "text-outline dark:text-inverse-on-surface/50")}>{priority}</td>
-      <td className="py-4 px-4 text-base text-on-surface dark:text-inverse-on-surface font-medium">{host}</td>
-      <td className="py-4 px-4 text-base text-outline dark:text-inverse-on-surface/50 font-mono text-sm">{ip}</td>
-      <td className="py-4 px-4">
-        <span className={cn("inline-flex items-center gap-1 text-xs font-bold px-2 py-1 rounded-full",
-          isOk ? "text-green-700 bg-green-100" : "text-heat-orange bg-orange-100 dark:bg-orange-900/40 dark:text-orange-300"
-        )}>
-          <span className="material-symbols-outlined text-[14px]">
-            {isOk ? 'check_circle' : 'warning'}
-          </span> 
-          {isOk ? 'OK' : 'Slow Response'}
-        </span>
-      </td>
-    </tr>
-  );
+function MxStatusIcon({ status, large = false }: { status: MxCheckStatus; large?: boolean }) {
+  const icon = status === 'critical' ? 'error' : status === 'warning' ? 'warning' : status === 'info' ? 'info' : 'check_circle';
+  const color = status === 'critical' ? 'text-red-500' : status === 'warning' ? 'text-amber-500' : status === 'info' ? 'text-primary' : 'text-emerald-600';
+  return <span className={cn('material-symbols-outlined shrink-0', large ? 'text-[28px]' : 'text-[20px]', color)} style={{ fontVariationSettings: "'FILL' 1" }}>{icon}</span>;
 }

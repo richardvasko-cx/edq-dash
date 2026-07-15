@@ -18,13 +18,13 @@ import GeminiIcon from '../GeminiIcon';
 import type { ResourceFilters } from '../charts/MetricsFilterTypes';
 import type { DateRange } from '../charts/DateRangeControl';
 import { aggregate, type HistoricalMetricRecord } from '../../services/historicalMetricsDataset';
+import { DELIVERABILITY_BENCHMARKS } from '../../services/deliverabilityBenchmarks';
 
-export type EmailPerformanceSubview = 'overview' | 'audience' | 'receiver' | 'campaigns';
+export type EmailPerformanceSubview = 'overview' | 'audience' | 'campaigns';
 export type EmailPerformancePanelKey =
   | 'performanceTrend'
   | 'recipientResponse'
   | 'engagementTrend'
-  | 'volumeRelationship'
   | 'receiverTrend';
 
 type MetricTone = 'positive' | 'negative' | 'neutral' | 'warning';
@@ -55,7 +55,6 @@ const compactFmt = new Intl.NumberFormat('en-GB', { notation: 'compact', maximum
 const subviews: Array<{ id: EmailPerformanceSubview; label: string; soon?: boolean }> = [
   { id: 'overview', label: 'Overview' },
   { id: 'audience', label: 'Audience & Engagement' },
-  { id: 'receiver', label: 'Receiver Performance' },
   { id: 'campaigns', label: 'Campaigns & Canvases', soon: true },
 ];
 
@@ -108,12 +107,6 @@ export const EMAIL_PANEL_METRICS: Record<EmailPerformancePanelKey, string[]> = {
     'nonprefetched_open_rate',
     'click_through_rate',
   ],
-  volumeRelationship: [
-    'count_sent',
-    'nonprefetched_open_rate',
-    'click_through_rate',
-    'spam_complaint_rate',
-  ],
   receiverTrend: [
     'nonprefetched_open_rate',
     'click_through_rate',
@@ -125,7 +118,6 @@ export const EMAIL_PANEL_TITLES: Record<EmailPerformancePanelKey, string> = {
   performanceTrend: 'Email performance over time',
   recipientResponse: 'Recipient response over time',
   engagementTrend: 'Engagement quality over time',
-  volumeRelationship: 'Volume and engagement relationship',
   receiverTrend: 'Receiver trend comparison',
 };
 
@@ -171,6 +163,7 @@ function inRange(rows: HistoricalMetricRecord[], range: DateRange, filters: Reso
     match(row.recipient_domain, filters.recipientDomains) &&
     match(row.ip_pool, filters.ipPools) &&
     match(row.mailbox_provider, filters.mailboxProviders) &&
+    match(row.campaign, filters.campaigns) &&
     match(row.subaccount, filters.subaccounts)
   );
 }
@@ -187,6 +180,15 @@ function previousRange(range: DateRange): DateRange {
   start.setDate(end.getDate() - days + 1);
   const iso = (date: Date) => date.toISOString().slice(0, 10);
   return { from: iso(start), to: iso(end) };
+}
+
+function trailingWeekRange(rows: HistoricalMetricRecord[], endDate: string) {
+  const availableDates = [...new Set(rows.map(row => row.metric_date))].sort();
+  const end = endDate || availableDates.at(-1) || '';
+  if (!end) return { from: '', to: '' };
+  const endIndex = availableDates.lastIndexOf(end);
+  const startIndex = Math.max(0, endIndex - 6);
+  return { from: availableDates[startIndex] || end, to: end };
 }
 
 type ComparisonState = {
@@ -301,19 +303,15 @@ function buildTrendRows(rows: HistoricalMetricRecord[]): TrendRow[] {
   });
 }
 
-function normaliseSeries(selectedMetrics: string[], fallback: SeriesKey[]) {
+function normaliseSeries(selectedMetrics: string[]) {
   const mapped = selectedMetrics.map(metric => metricToSeries[metric]).filter(Boolean) as SeriesKey[];
-  const next = [...new Set(mapped.length ? mapped : fallback)];
-  for (const key of fallback) {
-    if (next.length >= 4) break;
-    if (!next.includes(key)) next.push(key);
-  }
-  return next.slice(0, 4);
+  return [...new Set(mapped)];
 }
 
-function panelSeries(panelKey: EmailPerformancePanelKey, selectedMetrics: string[], fallback: SeriesKey[]) {
+function panelSeries(panelKey: EmailPerformancePanelKey, selectedMetrics: string[]) {
   const allowed = new Set(EMAIL_PANEL_METRICS[panelKey]);
-  return normaliseSeries(selectedMetrics.filter(metric => allowed.has(metric)), fallback);
+  const selected = selectedMetrics.filter(metric => allowed.has(metric));
+  return normaliseSeries(selected);
 }
 
 function EmptyState({ title, body }: { title: string; body: string }) {
@@ -402,7 +400,9 @@ function MetricTile({
       {comparison}
     </>
   );
-  const className = 'min-h-[110px] min-w-0 overflow-hidden rounded-2xl border border-purple-300/10 bg-[#300266] px-3 py-4 text-center shadow-none';
+  // Match the Deliverability KPI cards exactly: the delta remains a dedicated
+  // third row, so every square keeps the same visual rhythm.
+  const className = 'min-h-[110px] min-w-0 overflow-hidden rounded-2xl border border-purple-300/10 bg-[#300266] px-3 py-4 text-center shadow-none flex flex-col items-center justify-center';
 
   if (onClick) {
     return (
@@ -488,7 +488,8 @@ function ChartTooltip({ active, payload, label }: any) {
 
 function MixedMetricChart({ rows, series, height = 330 }: { rows: TrendRow[]; series: SeriesKey[]; height?: number }) {
   if (!rows.length) return <EmptyState title="No performance data" body="No qualifying email metrics were found for the selected scope." />;
-  const activeSeries = series.slice(0, 4);
+  if (!series.length) return <EmptyState title="No selected metrics" body="Use Metrics & filters to select a metric supported by this panel." />;
+  const activeSeries = series;
   return (
     <div style={{ height }}>
       <ResponsiveContainer width="100%" height="100%">
@@ -651,9 +652,9 @@ function AssessmentPanel({
   const weakestReceiver = receivers[0];
   const hasReceiverConcentration = Boolean(weakestReceiver && weakestReceiver.metrics.sent > current.sent * 0.12 && weakestReceiver.metrics.confirmedOpenRate + 0.02 < current.confirmedOpenRate);
   const areas = [
-    { name: 'Delivery', metric: rate(current.acceptedRate), status: current.acceptedRate < 0.94 ? 'Needs attention' : 'Stable', observation: `${rate(current.delayedRate)} deferred and ${rate(current.bounceRate)} bounced in the selected scope.`, interpretation: 'This describes the mailbox hand-off. It does not, on its own, identify a content or engagement problem.', action: 'Compare deferrals and bounces by mailbox provider before changing send volume.', color: '#801ED7' },
-    { name: 'Placement', metric: current.inbox + current.spam > 0 ? rate(current.inboxFolderRate) : 'No sample', status: current.inbox + current.spam === 0 ? 'Unmeasured' : current.inboxFolderRate < 0.8 ? 'Needs attention' : 'Stable', observation: current.inbox + current.spam > 0 ? `${rate(current.spamFolderRate)} of the measured sample reached spam.` : 'No inbox or spam placement sample is available for this filter scope.', interpretation: 'Placement data represents a measured sample, not all accepted messages.', action: 'Use placement alongside receiver data before making inboxing or content conclusions.', color: '#B9186E' },
-    { name: 'Engagement', metric: rate(current.confirmedOpenRate), status: current.confirmedOpenRate < 0.18 ? 'Needs attention' : 'Stable', observation: `${rate(current.clickThroughRate)} click-through and ${rate(current.unsubscribeRate)} unsubscribe rate.`, interpretation: 'Confirmed opens exclude privacy-prefetched activity, making this a useful engagement baseline.', action: 'Compare engaged cohorts, subject lines, and call-to-action performance.', color: '#E978F1' },
+    { name: 'Delivery', metric: rate(current.acceptedRate), status: current.acceptedRate < DELIVERABILITY_BENCHMARKS.deliveryRate.healthy ? 'Needs attention' : 'Stable', observation: `${rate(current.delayedRate)} deferred and ${rate(current.bounceRate)} bounced in the selected scope.`, interpretation: 'This is mailbox hand-off. The source-backed operating target is around 99%; it does not, on its own, identify an inbox-placement or content problem.', action: 'Compare deferrals and bounces by mailbox provider before changing send volume.', color: '#801ED7' },
+    { name: 'Placement', metric: current.inbox + current.spam > 0 ? rate(current.inboxFolderRate) : 'No sample', status: current.inbox + current.spam === 0 ? 'Unmeasured' : 'Contextual', observation: current.inbox + current.spam > 0 ? `${rate(current.spamFolderRate)} of the measured sample reached spam.` : 'No inbox or spam placement sample is available for this filter scope.', interpretation: 'Placement data represents a measured sample, not all accepted messages. No universal placement pass/fail threshold is applied.', action: 'Compare against the provider and campaign baseline before making inboxing or content conclusions.', color: '#B9186E' },
+    { name: 'Engagement', metric: rate(current.confirmedOpenRate), status: 'Contextual', observation: `${rate(current.clickThroughRate)} click-through and ${rate(current.unsubscribeRate)} unsubscribe rate.`, interpretation: 'Confirmed opens exclude privacy-prefetched activity. The >25% open signal applies to IP warming only, so engagement is compared with a like-for-like campaign baseline.', action: 'Compare engaged cohorts, subject lines, and call-to-action performance.', color: '#E978F1' },
     { name: 'Receiver focus', metric: weakestReceiver?.provider ?? 'No receiver', status: hasReceiverConcentration ? 'Needs attention' : 'Stable', observation: hasReceiverConcentration && weakestReceiver ? `${weakestReceiver.provider} is below the account confirmed-open baseline.` : 'No mailbox provider is materially below the account confirmed-open baseline.', interpretation: 'Receiver differences help separate broad audience effects from provider-specific behaviour.', action: hasReceiverConcentration ? `Inspect ${weakestReceiver?.provider} separately for cadence, placement, and authentication.` : 'Monitor receiver performance as campaign volume changes.', color: '#FFA524' },
   ];
   const [selectedArea, setSelectedArea] = useState(0);
@@ -666,7 +667,7 @@ function AssessmentPanel({
     <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-[13px] font-black text-[#302A36]">Assessment matrix</p><p className="mt-0.5 text-[12px] text-[#716A78]">Select a row to review the observed metric, its limits, and the next investigation.</p></div>{comparisonContext && <p className="max-w-[380px] text-right text-[11px] leading-relaxed text-[#716A78]">{comparisonContext}</p>}</div>
     <div className="overflow-x-auto rounded-[18px] border border-[#E2D6F2] bg-white"><div className="min-w-[760px]">
       <div className="grid grid-cols-[150px_130px_145px_minmax(220px,1fr)_minmax(240px,1.15fr)] border-b border-[#EAE4F2] bg-[#FCFAFF] px-4 py-2.5 text-[11px] font-bold text-[#6750A4]"><span>Area</span><span>Observed</span><span>State</span><span>Evidence</span><span>Recommended next move</span></div>
-      {areas.map((area, index) => <button key={area.name} type="button" onClick={() => setSelectedArea(index)} className={cn('grid w-full grid-cols-[150px_130px_145px_minmax(220px,1fr)_minmax(240px,1.15fr)] items-center border-b border-[#F0EBF6] px-4 py-3 text-left transition-colors last:border-b-0', selectedArea === index ? 'bg-[#FBF8FF]' : 'hover:bg-[#FCFBFE]')}><span className="flex items-center gap-2 text-[13px] font-black text-[#302A36]"><span className="h-7 w-1 rounded-full" style={{ backgroundColor: area.color }} />{area.name}</span><span className="text-[17px] font-black text-[#300266]">{area.metric}</span><span><span className={cn('rounded-full px-2.5 py-1 text-[11px] font-bold', area.status === 'Stable' ? 'bg-[#E7F5EC] text-[#137333]' : area.status === 'Unmeasured' ? 'bg-[#F1F3F4] text-[#5F6368]' : 'bg-[#FDE8E7] text-[#B3261E]')}>{area.status}</span></span><span className="pr-5 text-[11.5px] leading-relaxed text-[#5F5966]">{area.observation}</span><span className="text-[11.5px] leading-relaxed text-[#5F5966]">{area.action}</span></button>)}
+      {areas.map((area, index) => <button key={area.name} type="button" onClick={() => setSelectedArea(index)} className={cn('grid w-full grid-cols-[150px_130px_145px_minmax(220px,1fr)_minmax(240px,1.15fr)] items-center border-b border-[#F0EBF6] px-4 py-3 text-left transition-colors last:border-b-0', selectedArea === index ? 'bg-[#FBF8FF]' : 'hover:bg-[#FCFBFE]')}><span className="flex items-center gap-2 text-[13px] font-black text-[#302A36]"><span className="h-7 w-1 rounded-full" style={{ backgroundColor: area.color }} />{area.name}</span><span className="text-[17px] font-black text-[#300266]">{area.metric}</span><span><span className={cn('rounded-full px-2.5 py-1 text-[11px] font-bold', area.status === 'Stable' ? 'bg-[#E7F5EC] text-[#137333]' : area.status === 'Unmeasured' || area.status === 'Contextual' ? 'bg-[#F1F3F4] text-[#5F6368]' : 'bg-[#FDE8E7] text-[#B3261E]')}>{area.status}</span></span><span className="pr-5 text-[11.5px] leading-relaxed text-[#5F5966]">{area.observation}</span><span className="text-[11.5px] leading-relaxed text-[#5F5966]">{area.action}</span></button>)}
     </div></div>
     <motion.div layout className="grid gap-3 rounded-[18px] border border-[#DED0F4] bg-[#FCFAFF] p-4 md:grid-cols-[150px_minmax(0,1fr)_minmax(0,1fr)]"><div><span className="block h-2 w-12 rounded-full" style={{ backgroundColor: selected.color }} /><p className="mt-3 text-[14px] font-black text-[#302A36]">{selected.name}</p><p className="mt-1 text-[12px] font-semibold text-[#6750A4]">{selected.metric} observed</p></div><div><p className="text-[11px] font-bold text-[#6750A4]">How to read this</p><p className="mt-1.5 text-[12px] leading-relaxed text-[#5F5966]">{selected.interpretation}</p></div><div><p className="text-[11px] font-bold text-[#6750A4]">Next investigation</p><p className="mt-1.5 text-[12px] leading-relaxed text-[#5F5966]">{selected.action}</p></div></motion.div>
   </div>;
@@ -720,36 +721,87 @@ function receiverGroupMap(rows: HistoricalMetricRecord[]) {
   return new Map(receiverGroups(rows).map(item => [item.provider, item.metrics]));
 }
 
-function buildReceiverTrendRows(rows: HistoricalMetricRecord[], providers: string[]) {
+type ReceiverTrendSeries = {
+  key: string;
+  provider: string;
+  metric: SeriesKey;
+  label: string;
+  color: string;
+  dash: string;
+};
+
+function receiverTrendSeries(providers: string[], metrics: SeriesKey[]): ReceiverTrendSeries[] {
+  return metrics.flatMap(metric => providers.map((provider, providerIndex) => ({
+    key: `${metric}:${provider}`,
+    provider,
+    metric,
+    label: `${provider} - ${SERIES[metric].label}`,
+    color: SERIES[metric].color,
+    dash: RECEIVER_LINE_DASHES[providerIndex % RECEIVER_LINE_DASHES.length],
+  })));
+}
+
+function buildReceiverTrendRows(rows: HistoricalMetricRecord[], series: ReceiverTrendSeries[]) {
   const dates = [...new Set(rows.map(row => row.metric_date))].sort();
   return dates.map(date => {
     const day: Record<string, string | number | null> = { date, label: formatShortDate(date) };
-    for (const provider of providers) {
-      const scoped = rows.filter(row => row.metric_date === date && row.mailbox_provider === provider);
+    for (const item of series) {
+      const scoped = rows.filter(row => row.metric_date === date && row.mailbox_provider === item.provider);
       const metrics = aggregate(scoped);
-      day[provider] = scoped.length ? metrics.confirmedOpenRate : null;
+      day[item.key] = scoped.length ? metrics[item.metric] : null;
     }
     return day;
   });
 }
 
-function ReceiverTrendChart({ rows, providers }: { rows: HistoricalMetricRecord[]; providers: string[] }) {
-  const chartRows = useMemo(() => buildReceiverTrendRows(rows, providers), [rows, providers]);
-  const colors = [BRAZE_PINK, BRAZE_ORANGE, BRAZE_PURPLE_LIGHT, '#66BB6A', '#AECBFA'];
-  if (!chartRows.length || !providers.length) return <EmptyState title="No receiver trend" body="Select at least one receiver group with sufficient volume." />;
+const RECEIVER_LINE_DASHES = ['', '9 5', '2 4', '12 4 2 4', '1 5', '14 5'];
+
+function ReceiverTrendChart({ rows, providers, series }: { rows: HistoricalMetricRecord[]; providers: string[]; series: SeriesKey[] }) {
+  const activeSeries = series.filter(key => SERIES[key]?.kind === 'rate');
+  const lineSeries = useMemo(() => receiverTrendSeries(providers, activeSeries), [providers, activeSeries]);
+  const chartRows = useMemo(() => buildReceiverTrendRows(rows, lineSeries), [rows, lineSeries]);
+  if (!providers.length) return <EmptyState title="No receiver trend" body="Select at least one receiver group with sufficient volume." />;
+  if (!activeSeries.length) return <EmptyState title="No selected metrics" body="Select a receiver metric in Metrics & filters to compare providers." />;
   return (
-    <div className="h-[320px]">
-      <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={chartRows} margin={{ top: 8, right: 18, bottom: 0, left: 0 }}>
-          <CartesianGrid stroke={GRID} vertical={false} />
-          <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: BRAZE_PINK_LIGHT, fontSize: 11, fontWeight: 700 }} />
-          <YAxis axisLine={false} tickLine={false} tickFormatter={(value: number) => `${Math.round(value * 100)}%`} tick={{ fill: BRAZE_PINK_LIGHT, fontSize: 11, fontWeight: 700 }} />
-          <Tooltip formatter={(value: number) => rate(value)} labelStyle={{ color: '#111' }} />
-          {providers.map((provider, index) => (
-            <Line key={provider} type="monotone" dataKey={provider} stroke={colors[index % colors.length]} strokeWidth={3} dot={false} connectNulls={false} />
-          ))}
-        </ComposedChart>
-      </ResponsiveContainer>
+    <div>
+      <div className="mb-4 flex flex-wrap gap-x-4 gap-y-2" aria-label={`Showing ${lineSeries.length} receiver metric series`}>
+        {lineSeries.map(item => (
+          <span key={item.key} className="inline-flex items-center gap-2 text-[11px] font-bold text-purple-100">
+            <span
+              aria-hidden="true"
+              className="block h-0 w-5 border-t-[3px]"
+              style={{
+                borderColor: item.color,
+                borderTopStyle: item.dash ? 'dashed' : 'solid',
+              }}
+            />
+            {item.label}
+          </span>
+        ))}
+      </div>
+      <div className="h-[360px]">
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={chartRows} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+            <CartesianGrid stroke={GRID} vertical={false} />
+            <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: BRAZE_PINK_LIGHT, fontSize: 10, fontWeight: 700 }} />
+            <YAxis axisLine={false} tickLine={false} domain={[0, 'auto']} tickFormatter={(value: number) => `${Math.round(value * 100)}%`} tick={{ fill: BRAZE_PINK_LIGHT, fontSize: 10, fontWeight: 700 }} width={38} />
+            <Tooltip formatter={(value: number) => rate(value)} labelStyle={{ color: '#111' }} />
+            {lineSeries.map(item => (
+              <Line
+                key={item.key}
+                type="monotone"
+                dataKey={item.key}
+                name={item.label}
+                stroke={item.color}
+                strokeDasharray={item.dash || undefined}
+                strokeWidth={2.5}
+                dot={false}
+                connectNulls={false}
+              />
+            ))}
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 }
@@ -811,24 +863,48 @@ export function EmailPerformanceDashboard({
   const [selectedReceivers, setSelectedReceivers] = useState<string[]>([]);
   const dashboardTopRef = useRef<HTMLDivElement | null>(null);
 
-  const currentRows = useMemo(() => inRange(rows, range, filters), [rows, range, filters]);
-  const previousRows = useMemo(() => inRange(rows, previousRange(range), filters), [rows, range, filters]);
+  // Mailbox-provider filtering is meaningful for receiver diagnostics only.
+  // Account, audience, and campaign panels always retain the wider resource scope.
+  const accountFilters = useMemo(() => ({ ...filters, mailboxProviders: [] }), [filters]);
+  const currentRows = useMemo(() => inRange(rows, range, accountFilters), [rows, range, accountFilters]);
+  const previousRows = useMemo(() => inRange(rows, previousRange(range), accountFilters), [rows, range, accountFilters]);
+  const receiverRows = useMemo(() => inRange(rows, range, filters), [rows, range, filters]);
   const comparison = useMemo(() => comparisonState(currentRows, previousRows, range), [currentRows, previousRows, range]);
+  // KPI WoW labels always compare the trailing complete week to the seven days
+  // before it. This remains meaningful when the visible screen spans 30 days.
+  const weeklyRange = useMemo(() => trailingWeekRange(rows, range.to), [rows, range.to]);
+  const weeklyRows = useMemo(() => inRange(rows, weeklyRange, accountFilters), [rows, weeklyRange, accountFilters]);
+  const weeklyPreviousRows = useMemo(() => inRange(rows, previousRange(weeklyRange), accountFilters), [rows, weeklyRange, accountFilters]);
+  const tileComparison = useMemo<ComparisonState>(
+    () => comparisonState(weeklyRows, weeklyPreviousRows, weeklyRange),
+    [weeklyRows, weeklyPreviousRows, weeklyRange],
+  );
   const current = useMemo(() => aggregate(currentRows), [currentRows]);
   const previous = useMemo(() => aggregate(previousRows), [previousRows]);
+  const weekly = useMemo(() => aggregate(weeklyRows), [weeklyRows]);
+  const weeklyPrevious = useMemo(() => aggregate(weeklyPreviousRows), [weeklyPreviousRows]);
   const trendRows = useMemo(() => buildTrendRows(currentRows), [currentRows]);
-  const receivers = useMemo(() => receiverGroups(currentRows), [currentRows]);
-  const activeReceivers = selectedReceivers.length ? selectedReceivers : receivers.slice(0, 4).map(item => item.provider);
+  const receivers = useMemo(() => receiverGroups(receiverRows), [receiverRows]);
+  const defaultReceivers = useMemo(
+    () => [...receivers]
+      .sort((a, b) => b.metrics.sent - a.metrics.sent)
+      .slice(0, 3)
+      .map(item => item.provider),
+    [receivers],
+  );
+  const explicitReceivers = selectedReceivers.filter(provider => receivers.some(item => item.provider === provider));
+  const activeReceivers = explicitReceivers.length ? explicitReceivers : defaultReceivers;
   const filteredReceivers = receivers.filter(item => item.provider.toLowerCase().includes(receiverSearch.toLowerCase()));
   const opens = sum(currentRows, 'count_nonprefetched_unique_confirmed_opened');
   const clicks = sum(currentRows, 'count_unique_clicked');
   const complaints = sum(currentRows, 'count_spam_complaint');
   const unsubscribes = sum(currentRows, 'count_unsubscribe');
   const clickToOpenRate = safeRatio(clicks, opens);
-  const previousClickToOpenRate = safeRatio(sum(previousRows, 'count_unique_clicked'), sum(previousRows, 'count_nonprefetched_unique_confirmed_opened'));
+  const weeklyClickToOpenRate = safeRatio(sum(weeklyRows, 'count_unique_clicked'), sum(weeklyRows, 'count_nonprefetched_unique_confirmed_opened'));
+  const weeklyPreviousClickToOpenRate = safeRatio(sum(weeklyPreviousRows, 'count_unique_clicked'), sum(weeklyPreviousRows, 'count_nonprefetched_unique_confirmed_opened'));
   const panelVisible = (key: string, aliases: string[] = []) => ![key, ...aliases].some(alias => hiddenPanels.has(alias));
   const rangeLabel = range.from && range.to ? `${range.from} to ${range.to}` : `${uniqueDays(currentRows)}-day view`;
-  const metricsFor = (panelKey: EmailPerformancePanelKey, fallback: SeriesKey[]) => panelSeries(panelKey, selectedMetrics, fallback);
+  const metricsFor = (panelKey: EmailPerformancePanelKey) => panelSeries(panelKey, selectedMetrics);
   const panelMetricCount = (panelKey: EmailPerformancePanelKey) => selectedMetrics.filter(metric => EMAIL_PANEL_METRICS[panelKey].includes(metric)).length;
   const panelActions = (panelKey: EmailPerformancePanelKey, dark = false) => (
     <PanelMetricAction count={panelMetricCount(panelKey)} dark={dark} onClick={() => onOpenMetrics?.(panelKey)} />
@@ -843,16 +919,16 @@ export function EmailPerformanceDashboard({
     <div ref={dashboardTopRef} className="flex flex-col gap-6">
       {toolbar && (
         <motion.div
-          className="sticky top-0 z-30 -mt-3 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 py-2.5 pointer-events-none"
+          className="sticky top-0 z-30 -mt-3 flex flex-wrap items-center justify-between gap-2 bg-transparent py-2.5 pointer-events-none"
           {...md3Enter}
           transition={{ duration: 0.34, ease: md3Ease }}
         >
-          <div className="pointer-events-auto -my-2 max-w-[calc(100vw-2rem)] overflow-x-auto px-2 py-2 no-scrollbar">
-            <nav aria-label="Email Performance views" className="flex w-max items-center gap-[3px] overflow-visible rounded-[100px] border border-[rgba(218,220,224,0.8)] bg-white/95 p-[6px] shadow-[0_4px_20px_rgba(32,33,36,0.08),0_1px_4px_rgba(32,33,36,0.04)] backdrop-blur-[12px] dark:border-white/[0.08] dark:bg-[#28272E]/95">
+          <div className="pointer-events-auto -my-2 shrink-0 px-2 py-2">
+            <nav aria-label="Email Performance views" className="flex w-max items-center gap-[3px] overflow-visible rounded-[100px] border border-[rgba(218,220,224,0.8)] bg-white p-[6px] shadow-[0_4px_20px_rgba(32,33,36,0.08),0_1px_4px_rgba(32,33,36,0.04)] dark:border-white/[0.08] dark:bg-[#28272E]">
               <Subnav view={view} onViewChange={changeView} />
             </nav>
           </div>
-          <div className="pointer-events-auto flex items-center justify-end gap-2">
+          <div className="pointer-events-auto ml-auto flex shrink-0 items-center justify-end gap-2">
             {toolbar}
           </div>
         </motion.div>
@@ -863,18 +939,18 @@ export function EmailPerformanceDashboard({
       {view === 'overview' && (
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-            <MetricTile label="Sent" value={number(current.sent)} wowDiff={periodChange(current.sent, previous.sent, comparison)} onClick={() => onOpenMetrics?.('performanceTrend')} />
-            <MetricTile label="Accepted" value={number(current.accepted)} wowDiff={periodChange(current.accepted, previous.accepted, comparison)} />
-            <MetricTile label="Accepted Rate" value={rate(current.acceptedRate)} wowDiff={periodChange(current.acceptedRate, previous.acceptedRate, comparison)} />
-            <MetricTile label="Confirmed Opens" value={number(opens)} wowDiff={periodChange(opens, sum(previousRows, 'count_nonprefetched_unique_confirmed_opened'), comparison)} onClick={() => onOpenMetrics?.('performanceTrend')} />
-            <MetricTile label="Confirmed Open Rate" value={rate(current.confirmedOpenRate)} wowDiff={periodChange(current.confirmedOpenRate, previous.confirmedOpenRate, comparison)} onClick={() => onOpenMetrics?.('performanceTrend')} />
-            <MetricTile label="Unique Clicks" value={number(clicks)} wowDiff={periodChange(clicks, sum(previousRows, 'count_unique_clicked'), comparison)} onClick={() => onOpenMetrics?.('recipientResponse')} />
-            <MetricTile label="Click-through Rate" value={rate(current.clickThroughRate)} wowDiff={periodChange(current.clickThroughRate, previous.clickThroughRate, comparison)} onClick={() => onOpenMetrics?.('performanceTrend')} />
-            <MetricTile label="Click-to-open Rate" value={rate(clickToOpenRate)} wowDiff={periodChange(clickToOpenRate, previousClickToOpenRate, comparison)} onClick={() => onOpenMetrics?.('engagementTrend')} />
-            <MetricTile label="Unsubscribe Rate" value={rate(current.unsubscribeRate)} wowDiff={periodChange(current.unsubscribeRate, previous.unsubscribeRate, comparison)} inverse onClick={() => onOpenMetrics?.('recipientResponse')} />
-            <MetricTile label="Spam Complaint Rate" value={rate(current.complaintRate, 2)} wowDiff={periodChange(current.complaintRate, previous.complaintRate, comparison)} inverse onClick={() => onOpenMetrics?.('recipientResponse')} />
-            <MetricTile label="Inbox Rate" value={current.inbox + current.spam > 0 ? rate(current.inboxFolderRate) : 'Not available'} wowDiff={periodChange(current.inboxFolderRate, previous.inboxFolderRate, comparison)} />
-            <MetricTile label="Bounce Rate" value={rate(current.bounceRate)} wowDiff={periodChange(current.bounceRate, previous.bounceRate, comparison)} inverse />
+            <MetricTile label="Sent" value={number(current.sent)} wowDiff={periodChange(weekly.sent, weeklyPrevious.sent, tileComparison)} onClick={() => onOpenMetrics?.('performanceTrend')} />
+            <MetricTile label="Accepted" value={number(current.accepted)} wowDiff={periodChange(weekly.accepted, weeklyPrevious.accepted, tileComparison)} />
+            <MetricTile label="Accepted Rate" value={rate(current.acceptedRate)} wowDiff={periodChange(weekly.acceptedRate, weeklyPrevious.acceptedRate, tileComparison)} />
+            <MetricTile label="Confirmed Opens" value={number(opens)} wowDiff={periodChange(sum(weeklyRows, 'count_nonprefetched_unique_confirmed_opened'), sum(weeklyPreviousRows, 'count_nonprefetched_unique_confirmed_opened'), tileComparison)} onClick={() => onOpenMetrics?.('performanceTrend')} />
+            <MetricTile label="Confirmed Open Rate" value={rate(current.confirmedOpenRate)} wowDiff={periodChange(weekly.confirmedOpenRate, weeklyPrevious.confirmedOpenRate, tileComparison)} onClick={() => onOpenMetrics?.('performanceTrend')} />
+            <MetricTile label="Unique Clicks" value={number(clicks)} wowDiff={periodChange(sum(weeklyRows, 'count_unique_clicked'), sum(weeklyPreviousRows, 'count_unique_clicked'), tileComparison)} onClick={() => onOpenMetrics?.('recipientResponse')} />
+            <MetricTile label="Click-through Rate" value={rate(current.clickThroughRate)} wowDiff={periodChange(weekly.clickThroughRate, weeklyPrevious.clickThroughRate, tileComparison)} onClick={() => onOpenMetrics?.('performanceTrend')} />
+            <MetricTile label="Click-to-open Rate" value={rate(clickToOpenRate)} wowDiff={periodChange(weeklyClickToOpenRate, weeklyPreviousClickToOpenRate, tileComparison)} onClick={() => onOpenMetrics?.('engagementTrend')} />
+            <MetricTile label="Unsubscribe Rate" value={rate(current.unsubscribeRate)} wowDiff={periodChange(weekly.unsubscribeRate, weeklyPrevious.unsubscribeRate, tileComparison)} inverse onClick={() => onOpenMetrics?.('recipientResponse')} />
+            <MetricTile label="Spam Complaint Rate" value={rate(current.complaintRate, 2)} wowDiff={periodChange(weekly.complaintRate, weeklyPrevious.complaintRate, tileComparison)} inverse onClick={() => onOpenMetrics?.('recipientResponse')} />
+            <MetricTile label="Inbox Rate" value={current.inbox + current.spam > 0 ? rate(current.inboxFolderRate) : 'Not available'} wowDiff={periodChange(weekly.inboxFolderRate, weeklyPrevious.inboxFolderRate, tileComparison)} />
+            <MetricTile label="Bounce Rate" value={rate(current.bounceRate)} wowDiff={periodChange(weekly.bounceRate, weeklyPrevious.bounceRate, tileComparison)} inverse />
           </div>
 
           {panelVisible('performanceTrend', ['emailTrend']) && (
@@ -884,7 +960,7 @@ export function EmailPerformanceDashboard({
               actions={panelActions('performanceTrend', true)}
               gemContent={`Email performance trend for ${rangeLabel}. ${compact(current.sent)} sent. Confirmed Open Rate ${rate(current.confirmedOpenRate)}. Click-through Rate ${rate(current.clickThroughRate)}.`}
             >
-              <MixedMetricChart rows={trendRows} series={metricsFor('performanceTrend', ['sent', 'confirmedOpenRate', 'clickThroughRate', 'confirmedOpens'])} />
+              <MixedMetricChart rows={trendRows} series={metricsFor('performanceTrend')} />
             </AnalyticsPanel>
           )}
 
@@ -909,7 +985,7 @@ export function EmailPerformanceDashboard({
                 actions={panelActions('recipientResponse', true)}
                 gemContent={recipientResponseGem(currentRows)}
               >
-                <MixedMetricChart rows={trendRows} series={metricsFor('recipientResponse', ['uniqueClicks', 'unsubscribeRate', 'complaintRate', 'movedToSpamRate'])} height={300} />
+              <MixedMetricChart rows={trendRows} series={metricsFor('recipientResponse')} height={300} />
               </AnalyticsPanel>
             )}
           </div>
@@ -919,10 +995,10 @@ export function EmailPerformanceDashboard({
       {view === 'audience' && (
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <MetricTile label="Confirmed Open Rate" value={rate(current.confirmedOpenRate)} wowDiff={periodChange(current.confirmedOpenRate, previous.confirmedOpenRate, comparison)} onClick={() => onOpenMetrics?.('engagementTrend')} />
-            <MetricTile label="Click-through Rate" value={rate(current.clickThroughRate)} wowDiff={periodChange(current.clickThroughRate, previous.clickThroughRate, comparison)} onClick={() => onOpenMetrics?.('engagementTrend')} />
-            <MetricTile label="Click-to-open Rate" value={rate(clickToOpenRate)} wowDiff={periodChange(clickToOpenRate, previousClickToOpenRate, comparison)} onClick={() => onOpenMetrics?.('engagementTrend')} />
-            <MetricTile label="Spam Complaint Rate" value={rate(current.complaintRate, 2)} wowDiff={periodChange(current.complaintRate, previous.complaintRate, comparison)} inverse onClick={() => onOpenMetrics?.('volumeRelationship')} />
+            <MetricTile label="Confirmed Open Rate" value={rate(current.confirmedOpenRate)} wowDiff={periodChange(weekly.confirmedOpenRate, weeklyPrevious.confirmedOpenRate, tileComparison)} onClick={() => onOpenMetrics?.('engagementTrend')} />
+            <MetricTile label="Click-through Rate" value={rate(current.clickThroughRate)} wowDiff={periodChange(weekly.clickThroughRate, weeklyPrevious.clickThroughRate, tileComparison)} onClick={() => onOpenMetrics?.('engagementTrend')} />
+            <MetricTile label="Click-to-open Rate" value={rate(clickToOpenRate)} wowDiff={periodChange(weeklyClickToOpenRate, weeklyPreviousClickToOpenRate, tileComparison)} onClick={() => onOpenMetrics?.('engagementTrend')} />
+            <MetricTile label="Spam Complaint Rate" value={rate(current.complaintRate, 2)} wowDiff={periodChange(weekly.complaintRate, weeklyPrevious.complaintRate, tileComparison)} inverse onClick={() => onOpenMetrics?.('receiverTrend')} />
           </div>
 
           {panelVisible('engagementTrend') && (
@@ -932,23 +1008,25 @@ export function EmailPerformanceDashboard({
               actions={panelActions('engagementTrend', true)}
               gemContent={`Engagement quality: opens ${number(opens)}, clicks ${number(clicks)}, confirmed open rate ${rate(current.confirmedOpenRate)}, click-through rate ${rate(current.clickThroughRate)}.`}
             >
-              <MixedMetricChart rows={trendRows} series={metricsFor('engagementTrend', ['confirmedOpens', 'uniqueClicks', 'confirmedOpenRate', 'clickThroughRate'])} />
+              <MixedMetricChart rows={trendRows} series={metricsFor('engagementTrend')} />
             </AnalyticsPanel>
           )}
 
-          {panelVisible('volumeRelationship') && (
-            <AnalyticsPanel title="Volume and engagement relationship" theme="dark" actions={panelActions('volumeRelationship', true)} gemContent={`Volume relationship: sent ${number(current.sent)}, open rate ${rate(current.confirmedOpenRate)}, CTR ${rate(current.clickThroughRate)}, complaint rate ${rate(current.complaintRate, 2)}.`}>
-              <MixedMetricChart rows={trendRows} series={metricsFor('volumeRelationship', ['sent', 'confirmedOpenRate', 'clickThroughRate', 'complaintRate'])} />
-            </AnalyticsPanel>
-          )}
-        </>
-      )}
-
-      {view === 'receiver' && (
-        <>
           {panelVisible('receiverTrend') && (
-            <AnalyticsPanel title="Receiver trend comparison" theme="dark" actions={panelActions('receiverTrend', true)} gemContent={`Receiver comparison for ${activeReceivers.join(', ') || 'no selected receivers'}.`}>
-              <ReceiverTrendChart rows={currentRows} providers={activeReceivers.slice(0, 5)} />
+            <AnalyticsPanel
+              title="Receiver trend comparison"
+              theme="dark"
+              actions={
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-black text-purple-100">
+                    {activeReceivers.length} provider{activeReceivers.length === 1 ? '' : 's'}
+                  </span>
+                  {panelActions('receiverTrend', true)}
+                </div>
+              }
+              gemContent={`Receiver comparison for ${activeReceivers.join(', ') || 'no selected receivers'}.`}
+            >
+              <ReceiverTrendChart rows={receiverRows} providers={activeReceivers} series={metricsFor('receiverTrend')} />
             </AnalyticsPanel>
           )}
 
@@ -999,7 +1077,7 @@ export function EmailPerformanceDashboard({
                       onClick={() => {
                         const next = activeReceivers.includes(item.provider)
                           ? activeReceivers.filter(provider => provider !== item.provider)
-                          : [...activeReceivers, item.provider].slice(-5);
+                          : [...activeReceivers, item.provider];
                         setSelectedReceivers(next);
                       }}
                       className={cn('rounded-[18px] border px-4 py-4 text-left transition-colors', activeReceivers.includes(item.provider) ? 'border-[#B79AEC] bg-[#FBF8FF]' : 'border-[#E2D6F2] bg-white hover:bg-[#FCFAFF]')}

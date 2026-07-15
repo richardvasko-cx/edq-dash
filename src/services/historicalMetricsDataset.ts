@@ -1,7 +1,7 @@
 // Historical provider-level metrics — the source for ALL time-series charts.
 //
 // Grain: one row per case_number × metric_date × mailbox_provider.
-// 30 dates per case · 6 providers per date · 180 rows per case · 2,700 rows total.
+// 30 dates per case · 6 scoped rows per date · 180 rows per case · 3,600 rows total.
 // The final three dates per case have is_current_metric_window = true; exactly one date
 // per case is the incident marker (six provider rows). Joined to the case dataset by
 // case_number (string) only.
@@ -213,6 +213,7 @@ const weightedAvg = (rs: HistoricalMetricRecord[], valKey: keyof HistoricalMetri
 export interface AggregatedMetrics {
   rows: number;
   targeted: number; sent: number; accepted: number; injected: number;
+  confirmedOpens: number; uniqueClicks: number;
   bounce: number; delayedFirst: number;
   inbox: number; spam: number;
   acceptedRate: number; bounceRate: number; hardBounceRate: number; softBounceRate: number; blockBounceRate: number;
@@ -230,6 +231,8 @@ export function aggregate(rs: HistoricalMetricRecord[]): AggregatedMetrics {
   return {
     rows: rs.length,
     targeted, sent, accepted, injected: sum(rs, 'count_injected'),
+    confirmedOpens: sum(rs, 'count_nonprefetched_unique_confirmed_opened'),
+    uniqueClicks: sum(rs, 'count_unique_clicked'),
     bounce: sum(rs, 'count_bounce'), delayedFirst: sum(rs, 'count_delayed_first'),
     inbox, spam,
     acceptedRate: ratio(accepted, sent),

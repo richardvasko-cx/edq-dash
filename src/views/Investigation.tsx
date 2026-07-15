@@ -16,6 +16,7 @@ import CaseThreadPanel from '../components/investigation/CaseThreadPanel';
 import WorkspacePanels from '../components/investigation/WorkspacePanels';
 import NextStepsPanel from '../components/investigation/NextStepsPanel';
 import RootCauseBody from '../components/investigation/RootCauseBody';
+import GeminiIcon from '../components/GeminiIcon';
 import { isClosedCase, type CaseRecord } from '../data';
 import { useCaseDataset } from '../hooks/useCaseDataset';
 import { useHistoricalMetrics } from '../hooks/useHistoricalMetrics';
@@ -36,6 +37,24 @@ import '@material/web/icon/icon.js';
 import '@material/web/list/list.js';
 import '@material/web/list/list-item.js';
 
+function DetailField({
+  label,
+  value,
+  className,
+  valueClassName,
+}: {
+  label: string;
+  value: string;
+  className?: string;
+  valueClassName?: string;
+}) {
+  return (
+    <div className={cn("min-w-0 border-b border-dotted border-[#DDE1E7] bg-[#FBFCFD] px-4 py-3 dark:border-outline-variant/30 dark:bg-inverse-surface/15", className)}>
+      <div className="text-[12px] font-medium text-on-surface-variant">{label}</div>
+      <div className={cn("mt-0.5 truncate text-[15px] font-bold leading-snug text-on-surface dark:text-inverse-on-surface", valueClassName)}>{value}</div>
+    </div>
+  );
+}
 
 export default function Investigation({
   activeSection,
@@ -70,7 +89,7 @@ export default function Investigation({
   );
   const [sharedMetricRange, setSharedMetricRange] = useState<DateRange>({ from: '', to: '' });
   const effectiveMetricRange: DateRange = {
-    from: sharedMetricRange.from || metricDates[0] || '',
+    from: sharedMetricRange.from || metricDates[Math.max(0, metricDates.length - 7)] || '',
     to: sharedMetricRange.to || metricDates[metricDates.length - 1] || '',
   };
   const messages = (selectedTicketId ? ticketMessages[selectedTicketId] : null)
@@ -96,14 +115,35 @@ export default function Investigation({
 
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [rootCauseUpdatedAt, setRootCauseUpdatedAt] = useState<Record<string, number>>({});
   // Drill-down memory: when a referenced ticket is opened from Support History we
   // remember where we came from so a Back button can restore it.
   const [drillBackId, setDrillBackId] = useState<string | null>(null);
-  const drillToTicket = (id: string) => { setDrillBackId(selectedTicketId); onSelectTicket(id); };
+  const drillToTicket = (id: string) => {
+    setDrillBackId(selectedTicketId);
+    onSelectTicket(id);
+    onSectionChange('Overview');
+  };
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [detailExpanded, setDetailExpanded] = useState(false);
-  // Contract end highlight: flag red only when the date is within 90 days from today.
-  const contractEndDate = '2026-08-30';
+  const [ticketStatusOverrides, setTicketStatusOverrides] = useState<Record<string, string>>({});
+  const ticketStatusOptions = ['Open', 'In Progress', 'Closed'];
+  const displayedTicketStatus = currentTicket
+    ? ticketStatusOverrides[currentTicket.case_number] ?? currentTicket.case_status ?? 'Open'
+    : 'Open';
+  const updateTicketStatus = (status: string) => {
+    if (!currentTicket) return;
+    setTicketStatusOverrides(current => ({ ...current, [currentTicket.case_number]: status }));
+  };
+  // Contract end highlight: flag the renewal only when it is within 90 days.
+  const contractEndDate = currentTicket?.contract_end_date || '2026-08-30';
+  const contractRenewalDate = new Date(`${contractEndDate}T00:00:00`);
+  const contractDaysRemaining = (() => {
+    if (Number.isNaN(contractRenewalDate.getTime())) return null;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return Math.ceil((contractRenewalDate.getTime() - today.getTime()) / 86_400_000);
+  })();
   const contractEndSoon = (() => {
     const end = new Date(contractEndDate + 'T00:00:00');
     if (isNaN(end.getTime())) return false;
@@ -112,6 +152,14 @@ export default function Investigation({
     const days = Math.ceil((end.getTime() - today.getTime()) / 86_400_000);
     return days >= 0 && days <= 90;
   })();
+  const contractRenewalLabel = Number.isNaN(contractRenewalDate.getTime())
+    ? contractEndDate
+    : new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(contractRenewalDate);
+  const currentCarrLabel = new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0,
+  }).format(currentTicket?.current_carr_usd ?? 1_450_000);
   const [workspaceMode, setWorkspaceMode] = useState<'panels' | 'chat'>('panels');
   const [panelStates, setPanelStates] = useState<Record<string, 'pending' | 'accepted' | 'rejected'>>({});
   const [emailCustomizeOpen, setEmailCustomizeOpen] = useState(false);
@@ -125,7 +173,7 @@ export default function Investigation({
   const [emailFilters, setEmailFilters] = useState<ResourceFilters>(EMPTY_FILTERS);
   const [emailMetricsOpen, setEmailMetricsOpen] = useState(false);
   const [emailMetricContext, setEmailMetricContext] = useState<EmailPerformancePanelKey | null>(null);
-  const [emailSubview, setEmailSubview] = useState<'overview' | 'audience' | 'receiver' | 'campaigns'>('overview');
+  const [emailSubview, setEmailSubview] = useState<'overview' | 'audience' | 'campaigns'>('overview');
   const [deliverabilityScope, setDeliverabilityScope] = useState<ResourceFilters | undefined>();
 
   const caseRows = React.useMemo(
@@ -155,14 +203,39 @@ export default function Investigation({
     };
   }, [caseRows]);
 
+  // General Email Performance panels begin with the full account scope. Provider
+  // selection is applied only within receiver-specific panels.
   useEffect(() => {
-    setSharedMetricRange({ from: '', to: '' });
+    if (!currentTicket) return;
+    setEmailFilters({
+      recipientDomains: [],
+      sendingIps: [],
+      ipPools: [],
+      campaigns: [],
+      mailboxProviders: [],
+      mailboxProviderRegions: [],
+      sendingDomains: [],
+      subaccounts: [],
+    });
+  }, [currentTicket?.case_number]);
+
+  useEffect(() => {
     setEmailSelectedMetrics(current => {
       const enabled = new Set(getEnabledMetricKeysForProvider(currentTicket?.email_service_provider));
       const next = current.filter(metric => enabled.has(metric));
       return next.length ? next : ['count_nonprefetched_unique_confirmed_opened', 'count_unique_clicked', 'nonprefetched_open_rate', 'click_through_rate'].filter(metric => enabled.has(metric));
     });
   }, [currentTicket?.case_number, currentTicket?.email_service_provider]);
+
+  // New ticket views start with the newest week of CSV metrics. This avoids
+  // treating missing older demo rows as a 30-day reporting window.
+  useEffect(() => {
+    if (!metricDates.length) return;
+    setSharedMetricRange({
+      from: metricDates[Math.max(0, metricDates.length - 7)],
+      to: metricDates[metricDates.length - 1],
+    });
+  }, [currentTicket?.case_number, metricDates]);
 
   useEffect(() => {
     if (activeSection === 'Email Performance') {
@@ -501,15 +574,9 @@ export default function Investigation({
       visible: emailPanelVisible('responseBalance'),
     },
     {
-      key: 'volumeRelationship',
-      title: 'Volume and engagement relationship',
-      description: 'Shows whether volume changes preceded weaker engagement or complaint movement.',
-      visible: emailPanelVisible('volumeRelationship'),
-    },
-    {
       key: 'receiverCards',
       title: 'Receiver overview cards',
-      description: 'Compact mailbox-provider summaries for the Receiver Performance view.',
+      description: 'Compact mailbox-provider summaries now shown under Audience & Engagement.',
       visible: emailPanelVisible('receiverCards'),
     },
     {
@@ -646,7 +713,10 @@ export default function Investigation({
   };
 
   return (
-    <div className="w-full h-full overflow-y-auto overflow-x-hidden custom-scrollbar bg-white dark:bg-[#121115] font-sans scroll-smooth">
+    <div className={cn(
+      'h-full w-full overflow-x-auto overflow-y-auto custom-scrollbar bg-white font-sans scroll-smooth dark:bg-[#121115]',
+      (activeSection === 'Deliverability' || activeSection === 'Email Performance') && 'min-w-[545px]'
+    )}>
       {/* scroll-smooth only affects programmatic scrolls (panel navigation lands smoothly);
           wheel/trackpad reading stays free — no CSS scroll-snap so long panels don't jump back. */}
 
@@ -686,17 +756,7 @@ export default function Investigation({
                 <span className="material-symbols-outlined text-[14px]">chevron_right</span>
                 <span className="text-[#1A73E8] font-bold">{currentTicket.case_number}</span>
               </div>
-              <div className="flex items-center gap-2">
-                {drillBackId && (
-                  <button
-                    onClick={() => { onSelectTicket(drillBackId); setDrillBackId(null); }}
-                    className="flex items-center gap-1.5 text-[12px] font-bold text-[#1A73E8] dark:text-[#8AB4F8] px-3 py-1.5 rounded-full border border-[#1A73E8]/30 hover:bg-[#1A73E8]/5 transition-colors"
-                  >
-                    <span className="material-symbols-outlined text-[16px]">arrow_back</span>
-                    Back to {drillBackId}
-                  </button>
-                )}
-              </div>
+              <div />
             </div>
 
             {/* CONDITIONAL SECTIONS: Overview */}
@@ -704,95 +764,67 @@ export default function Investigation({
               <motion.div {...md3Enter} transition={{ duration: 0.36, ease: md3Ease }} className="flex flex-col gap-6 font-sans pb-6">
 
                 {/* ── Ticket Info + Account Info panels ── */}
-                <motion.div className="grid grid-cols-1 xl:grid-cols-2 gap-6" {...md3Enter} transition={{ duration: 0.36, ease: md3Ease, delay: 0.04 }}>
+                <motion.div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-2" {...md3Enter} transition={{ duration: 0.36, ease: md3Ease, delay: 0.04 }}>
 
                   {/* Ticket Info Card */}
                   <motion.div
                     data-gem-panel
                     data-gem-panel-label="Ticket Info"
-                    data-gem-panel-content={`Ticket Info — Case: ${currentTicket.case_number} | Opened: ${currentTicket.case_created_at} | Owner: ${currentTicket.case_owner} | Status: ${currentTicket.case_status} | Subject: ${currentTicket.case_subject} | Detail: ${currentTicket.root_cause_summary}`}
-                    className="bg-surface-bright dark:bg-inverse-surface/10 rounded-[28px] border border-outline-variant/60 shadow-none p-6 flex flex-col"
+                    data-gem-panel-content={`Ticket Info — Case: ${currentTicket.case_number} | Opened: ${currentTicket.case_created_at} | Owner: ${currentTicket.case_owner} | Status: ${displayedTicketStatus} | Subject: ${currentTicket.case_subject} | Detail: ${currentTicket.root_cause_summary}`}
+                    className="bg-transparent"
                     {...md3Enter}
                     transition={{ duration: 0.34, ease: md3Ease, delay: 0.06 }}
                   >
-                    <div className="flex items-center gap-3 mb-4 select-none px-1">
-                      <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center">
-                        <md-icon style={{ fontSize: '20px' }}>confirmation_number</md-icon>
-                      </div>
-                      <div>
-                        <span className="text-[10px] font-black text-primary tracking-wider uppercase leading-none block mb-0.5">Case Info</span>
-                        <h3 className="text-lg font-black text-on-surface dark:text-inverse-on-surface leading-tight">Ticket Details</h3>
-                      </div>
+                    <div className="mb-2 select-none">
+                      <h3 className="text-[20px] font-black tracking-tight text-on-surface dark:text-inverse-on-surface">Ticket Details</h3>
                     </div>
-                    
-                    <md-list style={{ background: 'transparent' } as React.CSSProperties} className="flex-1">
-                      <md-list-item>
-                        <md-icon slot="start">tag</md-icon>
-                        <div slot="headline">Case Number</div>
-                        <div slot="supporting-text">{currentTicket.case_number}</div>
-                      </md-list-item>
-                      <md-divider inset />
-                      
-                      <md-list-item>
-                        <md-icon slot="start">calendar_today</md-icon>
-                        <div slot="headline">Date Opened</div>
-                        <div slot="supporting-text">{currentTicket.case_created_at}</div>
-                      </md-list-item>
-                      <md-divider inset />
-                      
-                      <md-list-item>
-                        <md-icon slot="start">person</md-icon>
-                        <div slot="headline">Case Owner</div>
-                        <div slot="supporting-text">{currentTicket.case_owner}</div>
-                      </md-list-item>
-                      <md-divider inset />
-                      
-                      <md-list-item>
-                        <md-icon slot="start">info</md-icon>
-                        <div slot="headline">Status</div>
-                        <span
-                          slot="end"
-                          className={cn(
-                            "px-3.5 py-1 text-white text-xs font-bold rounded-full select-none",
-                            currentTicket.case_status === 'Closed' ? "bg-gray-500"
-                            : currentTicket.case_status === 'In Progress' ? "bg-primary"
-                            : "bg-green-600"
-                          )}
-                        >
-                          {currentTicket.case_status || 'Open'}
-                        </span>
-                      </md-list-item>
-                      <md-divider inset />
-
-                      <md-list-item>
-                        <md-icon slot="start">title</md-icon>
-                        <div slot="headline">Subject</div>
-                        <div slot="supporting-text">{currentTicket.case_subject}</div>
-                      </md-list-item>
-                    </md-list>
-
-                    {/* Issue Summary Collapsible */}
-                    <div className="mt-4 p-3 bg-surface-container-low dark:bg-inverse-surface/30 rounded-xl border border-outline-variant/10">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-extrabold uppercase text-on-surface-variant/80 tracking-wider">Detailed RCA Summary</span>
-                        <md-text-button onClick={() => setDetailExpanded(v => !v)} style={{ '--md-text-button-label-text-size': '12px' } as React.CSSProperties}>
-                          {detailExpanded ? 'Hide' : 'Expand'}
-                          <md-icon slot="icon">{detailExpanded ? 'expand_less' : 'expand_more'}</md-icon>
-                        </md-text-button>
-                      </div>
-                      <AnimatePresence initial={false}>
-                        {detailExpanded && (
-                          <motion.p
-                            initial={{ opacity: 0, height: 0 }}
-                            animate={{ opacity: 1, height: 'auto' }}
-                            exit={{ opacity: 0, height: 0 }}
-                            transition={{ duration: 0.2, ease: 'easeOut' }}
-                            className="text-[13px] text-on-surface-variant leading-relaxed mt-2 overflow-hidden"
+                    <div className="overflow-hidden rounded-md border border-[#D2D7DE] bg-[#FBFCFD] dark:border-outline-variant/40 dark:bg-inverse-surface/15">
+                      <div className="grid grid-cols-1 sm:grid-cols-2">
+                      <DetailField className="sm:border-r" label="Case number" value={currentTicket.case_number} />
+                      <DetailField label="Date opened" value={new Date(currentTicket.case_created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} />
+                      <DetailField className="sm:border-r" label="Case owner" value={currentTicket.case_owner} />
+                      <div className="min-w-0 border-b border-dotted border-[#DDE1E7] bg-[#FBFCFD] px-4 py-3 dark:border-outline-variant/30 dark:bg-inverse-surface/15">
+                          <div className="text-[12px] font-medium text-on-surface-variant">Status</div>
+                          <div className="mt-0.5 relative inline-flex">
+                          <select
+                            aria-label="Ticket status"
+                            value={displayedTicketStatus}
+                            onChange={(event) => updateTicketStatus(event.target.value)}
+                            className={cn(
+                              "h-8 appearance-none rounded-full py-0 pl-3 pr-8 text-xs font-bold text-white outline-none",
+                              displayedTicketStatus === 'Closed' ? "bg-gray-500" : displayedTicketStatus === 'In Progress' ? "bg-[#FFCE18]" : "bg-[#188038]"
+                            )}
                           >
+                            {ticketStatusOptions.map(status => <option key={status} value={status}>{status}</option>)}
+                          </select>
+                          <md-icon className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-white" style={{ fontSize: '15px' } as React.CSSProperties}>expand_more</md-icon>
+                        </div>
+                      </div>
+                      <div className="border-b border-dotted border-[#DDE1E7] bg-[#FBFCFD] px-4 py-3 sm:col-span-2 dark:border-outline-variant/30 dark:bg-inverse-surface/15">
+                          <div className="text-[12px] font-medium text-on-surface-variant">Subject</div>
+                          <div className="mt-0.5 text-[15px] font-bold leading-snug text-on-surface dark:text-inverse-on-surface">{currentTicket.case_subject}</div>
+                      </div>
+                      <div className="bg-[#FBFCFD] px-4 sm:col-span-2 dark:bg-inverse-surface/15">
+                      <button
+                        type="button"
+                        onClick={() => setDetailExpanded(v => !v)}
+                        aria-expanded={detailExpanded}
+                        className="flex min-h-[50px] w-full items-center justify-between gap-3 text-left"
+                      >
+                        <span className="text-[13px] font-medium text-on-surface-variant">Detailed RCA summary</span>
+                        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={cn('h-7 w-7 shrink-0 text-[#1A73E8] transition-transform duration-300 ease-out', detailExpanded && 'rotate-45')}>
+                          <path d="M12 5v14M5 12h14" />
+                        </svg>
+                      </button>
+                      <div className={cn('grid transition-[grid-template-rows] duration-300 ease-out', detailExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]')}>
+                        <div className="overflow-hidden">
+                          <p className="border-t border-dotted border-[#DDE1E7] pb-3 pt-3 text-[12px] leading-relaxed text-on-surface-variant dark:border-outline-variant/30">
                             {currentTicket.root_cause_summary}
-                          </motion.p>
-                        )}
-                      </AnimatePresence>
+                          </p>
+                        </div>
+                      </div>
+                      </div>
+                      </div>
                     </div>
                   </motion.div>
 
@@ -800,68 +832,29 @@ export default function Investigation({
                   <motion.div
                     data-gem-panel
                     data-gem-panel-label="Account Info"
-                    data-gem-panel-content={`Account Info — Company: ${currentTicket.account_name} | Region: eu-central-1 | Cluster: 02 | MTA: ${providerLabel} | Micro classification: Enterprise | Contract end: 2026-08-30 | Current CARR: £1,450,000`}
-                    className="bg-surface-bright dark:bg-inverse-surface/10 rounded-[28px] border border-outline-variant/60 shadow-none p-6 flex flex-col"
+                    data-gem-panel-content={`Account Info — Company: ${currentTicket.account_name} | Region: ${currentTicket.region} | Cluster: ${currentTicket.cluster} | MTA: ${providerLabel} | Classification: ${currentTicket.macro_classification || 'Enterprise'} | Contract renewal: ${contractRenewalLabel} | Current CARR: ${currentCarrLabel}`}
+                    className="bg-transparent"
                     {...md3Enter}
                     transition={{ duration: 0.34, ease: md3Ease, delay: 0.1 }}
                   >
-                    <div className="flex items-center gap-3 mb-4 select-none px-1">
-                      <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center">
-                        <md-icon style={{ fontSize: '20px' }}>domain</md-icon>
-                      </div>
-                      <div>
-                        <span className="text-[10px] font-black text-primary tracking-wider uppercase leading-none block mb-0.5">Customer Info</span>
-                        <h3 className="text-lg font-black text-on-surface dark:text-inverse-on-surface leading-tight">Account Details</h3>
-                      </div>
+                    <div className="mb-2 select-none">
+                      <h3 className="text-[20px] font-black tracking-tight text-on-surface dark:text-inverse-on-surface">Account Details</h3>
                     </div>
-
-                    <md-list style={{ background: 'transparent' } as React.CSSProperties} className="flex-1">
-                      <md-list-item>
-                        <md-icon slot="start">business</md-icon>
-                        <div slot="headline">Company Name</div>
-                        <div slot="supporting-text">{currentTicket.account_name}</div>
-                      </md-list-item>
-                      <md-divider inset />
-
-                      <md-list-item>
-                        <md-icon slot="start">account_box</md-icon>
-                        <div slot="headline">Contact Person</div>
-                        <div slot="supporting-text">{currentTicket.contact_name}</div>
-                      </md-list-item>
-                      <md-divider inset />
-
-                      <md-list-item>
-                        <md-icon slot="start">dns</md-icon>
-                        <div slot="headline">Cluster & Region</div>
-                        <div slot="supporting-text">Region: eu-central-1 · Cluster: 02</div>
-                      </md-list-item>
-                      <md-divider inset />
-
-                      <md-list-item>
-                        <md-icon slot="start">mail_outline</md-icon>
-                        <div slot="headline">Email Service Provider</div>
-                        <div slot="supporting-text">{providerLabel}</div>
-                      </md-list-item>
-                      <md-divider inset />
-
-                      <md-list-item>
-                        <md-icon slot="start">vpn_key</md-icon>
-                        <div slot="headline">Contract & CARR</div>
-                        <div slot="supporting-text" className="flex flex-col gap-0.5 mt-0.5 select-none">
-                          <div className="flex items-center gap-2">
-                            <span className={cn("text-xs font-semibold", contractEndSoon ? "text-red-600 font-bold" : "text-on-surface-variant")}>
-                              Renewal: {contractEndDate}
-                            </span>
-                            {contractEndSoon && (
-                              <span className="inline-flex items-center gap-0.5 text-[9px] font-black bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300 px-1.5 py-0.5 rounded-full uppercase tracking-wider animate-pulse">
-                                <md-icon style={{ fontSize: '9px' } as React.CSSProperties}>warning</md-icon> Critical
-                              </span>
-                            )}
-                          </div>
-                          <span className="text-[11px] text-on-surface-variant/70">Current CARR: £1,450,000 · Enterprise Segment</span>
-                        </div>
-                      </md-list-item>
-                    </md-list>
+                    <div className="grid grid-cols-1 overflow-hidden rounded-md border border-[#D2D7DE] bg-[#FBFCFD] sm:grid-cols-2 dark:border-outline-variant/40 dark:bg-inverse-surface/15">
+                      <DetailField className="sm:border-r" label="Company" value={currentTicket.account_name} />
+                      <DetailField label="Contact" value={currentTicket.contact_name} />
+                      <DetailField className="sm:border-r" label="Region" value={currentTicket.region} />
+                      <DetailField label="Cluster" value={currentTicket.cluster} />
+                      <DetailField className="sm:border-r" label="Email service provider" value={providerLabel} />
+                      <DetailField
+                        label="Contract renewal"
+                        value={`${contractRenewalLabel}${contractEndSoon && contractDaysRemaining !== null ? ` · ${contractDaysRemaining} days remaining` : ''}`}
+                        className={cn(contractEndSoon && "outline outline-1 -outline-offset-1 outline-[#B3261E]/40")}
+                        valueClassName={cn(contractEndSoon && "text-[#B3261E] dark:text-red-300")}
+                      />
+                      <DetailField className="border-b-0 sm:border-r" label="Current CARR" value={currentCarrLabel} />
+                      <DetailField className="border-b-0" label="Account category" value={`${currentTicket.macro_classification || 'Enterprise'} segment`} />
+                    </div>
                   </motion.div>
                 </motion.div>
 
@@ -870,28 +863,30 @@ export default function Investigation({
                   data-gem-panel
                   data-gem-panel-label="Root Cause Analysis"
                   data-gem-panel-content={`Root Cause Analysis: ${currentTicket.root_cause_summary}`}
-                  className="bg-surface-container dark:bg-inverse-surface/30 rounded-[28px] border-none shadow-none p-6 relative overflow-hidden flex flex-col gap-4"
+                  className="rounded-[28px] border border-outline-variant/35 bg-[#F3F5F9] p-6 shadow-none dark:bg-inverse-surface/30"
                   {...md3Enter}
                   transition={{ duration: 0.36, ease: md3Ease, delay: 0.12 }}
                 >
-                  <div className="flex justify-between items-center select-none">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-950/40 text-red-700 dark:text-red-300 flex items-center justify-center">
-                        <md-icon style={{ fontSize: '20px' }}>priority_high</md-icon>
-                      </div>
-                      <div>
-                        <span className="text-[10px] font-black text-red-600 dark:text-red-400 tracking-wider uppercase leading-none block mb-0.5">Alert Level</span>
-                        <h3 className="text-lg font-black text-on-surface dark:text-inverse-on-surface leading-tight">Root Cause Analysis</h3>
+                  <div className="mb-5 flex flex-wrap items-start justify-between gap-4 select-none">
+                    <div>
+                      <h3 className="text-[28px] font-black tracking-tight text-on-surface dark:text-inverse-on-surface">Root Cause Summary</h3>
+                      <div className="mt-1 flex items-center gap-1.5 text-sm font-medium text-on-surface-variant">
+                        <span>powered by</span>
+                        <GeminiIcon className="h-5 w-5" />
+                        <span className="font-bold text-on-surface dark:text-inverse-on-surface">Gemini</span>
                       </div>
                     </div>
-                    <span className="text-xs font-medium text-on-surface-variant/80 flex items-center gap-1">
-                      <md-icon style={{ fontSize: '15px' } as React.CSSProperties}>schedule</md-icon> Updated 2h ago
+                    <span className="flex items-center gap-1.5 pt-1 text-sm font-medium text-on-surface-variant/80">
+                      <md-icon style={{ fontSize: '18px' } as React.CSSProperties}>schedule</md-icon>
+                      {rootCauseUpdatedAt[currentTicket.case_number]
+                        ? `Updated ${new Date(rootCauseUpdatedAt[currentTicket.case_number]).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                        : 'Generating analysis'}
                     </span>
                   </div>
-                  
-                  <md-divider />
-                  
-                  <RootCauseBody ticket={currentTicket} />
+                  <RootCauseBody
+                    ticket={currentTicket}
+                    onUpdatedAt={updatedAt => setRootCauseUpdatedAt(current => ({ ...current, [currentTicket.case_number]: updatedAt }))}
+                  />
                 </motion.div>
 
                 {/* Performance Metrics Grid */}
@@ -906,85 +901,22 @@ export default function Investigation({
                       data-gem-panel
                       data-gem-panel-label="Performance Metrics"
                       data-gem-panel-content={`Accepted Rate: ${acceptedPct} | Bounce Rate: ${bouncePct} | Open Rate: ${openPct} | Spam Complaint Rate: ${spamPct} | Sent: ${m.count_sent} | Accepted: ${m.count_accepted}`}
-                      className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4"
+                      className="grid grid-cols-2 lg:grid-cols-4 gap-3"
                       {...md3Enter}
                       transition={{ duration: 0.36, ease: md3Ease, delay: 0.16 }}
                     >
-                      {/* Accepted Rate */}
-                      <div className="bg-surface-container-low dark:bg-inverse-surface/10 rounded-[24px] p-5 shadow-none border border-outline-variant/65 flex items-center justify-between gap-4">
-                        <div className="flex-1 min-w-0">
-                          <h4 className="text-[11px] font-extrabold text-on-surface-variant/70 dark:text-inverse-on-surface/80 uppercase tracking-wide">Accepted Rate</h4>
-                          <p className="text-2xl font-black text-on-surface dark:text-inverse-on-surface mt-1">{acceptedPct}</p>
-                          <p className="text-[11px] text-on-surface-variant/65 mt-1 truncate">{m.count_accepted.toLocaleString()} / {m.count_sent.toLocaleString()} sent</p>
+                      {[
+                        { label: 'Accepted Rate', value: acceptedPct, detail: `${m.count_accepted.toLocaleString()} accepted of sends` },
+                        { label: 'Bounce Rate', value: bouncePct, detail: `${m.count_bounce.toLocaleString()} bounces of sends` },
+                        { label: 'Confirmed Open Rate', value: openPct, detail: `${m.count_nonprefetched_unique_confirmed_opened?.toLocaleString?.() ?? '—'} confirmed opens` },
+                        { label: 'Spam Complaint Rate', value: spamPct, detail: `${m.count_spam_complaint?.toLocaleString?.() ?? '0'} complaints of sends` },
+                      ].map(metric => (
+                        <div key={metric.label} className="flex min-h-[142px] min-w-0 flex-col items-center justify-center overflow-hidden rounded-2xl border border-purple-300/10 bg-[#300266] px-3 py-4 text-center shadow-none">
+                          <p className="text-[40px] font-black leading-none tracking-normal text-[#F5A3E3]">{metric.value}</p>
+                          <h4 className="mt-3 text-[16px] font-black text-[#FFD4BC]">{metric.label}</h4>
+                          <p className="mt-2 truncate text-[11px] font-bold text-purple-100/70">{metric.detail}</p>
                         </div>
-                        <div className="relative shrink-0 flex items-center justify-center">
-                          <md-circular-progress
-                            value={m.accepted_rate}
-                            style={{
-                              '--md-circular-progress-size': '54px',
-                              '--md-sys-color-primary': 'var(--color-primary)'
-                            } as React.CSSProperties}
-                          />
-                          <md-icon className="absolute text-[16px] text-primary">send</md-icon>
-                        </div>
-                      </div>
-
-                      {/* Bounce Rate */}
-                      <div className="bg-surface-container-low dark:bg-inverse-surface/10 rounded-[24px] p-5 shadow-none border border-outline-variant/65 flex items-center justify-between gap-4">
-                        <div className="flex-1 min-w-0">
-                          <h4 className="text-[11px] font-extrabold text-on-surface-variant/70 dark:text-inverse-on-surface/80 uppercase tracking-wide">Bounce Rate</h4>
-                          <p className="text-2xl font-black text-red-600 dark:text-[#FF8A6E] mt-1">{bouncePct}</p>
-                          <p className="text-[11px] text-on-surface-variant/65 mt-1 truncate">{m.count_bounce.toLocaleString()} bounces</p>
-                        </div>
-                        <div className="relative shrink-0 flex items-center justify-center">
-                          <md-circular-progress
-                            value={m.bounce_rate}
-                            style={{
-                              '--md-circular-progress-size': '54px',
-                              '--md-sys-color-primary': 'var(--color-heat-red)'
-                            } as React.CSSProperties}
-                          />
-                          <md-icon className="absolute text-[16px] text-red-600">trending_up</md-icon>
-                        </div>
-                      </div>
-
-                      {/* Open Rate */}
-                      <div className="bg-surface-container-low dark:bg-inverse-surface/10 rounded-[24px] p-5 shadow-none border border-outline-variant/65 flex items-center justify-between gap-4">
-                        <div className="flex-1 min-w-0">
-                          <h4 className="text-[11px] font-extrabold text-on-surface-variant/70 dark:text-inverse-on-surface/80 uppercase tracking-wide">Open Rate</h4>
-                          <p className="text-2xl font-black text-on-surface dark:text-inverse-on-surface mt-1">{openPct}</p>
-                          <p className="text-[11px] text-on-surface-variant/65 mt-1 truncate">CTR {(m.click_through_rate * 100).toFixed(1)}%</p>
-                        </div>
-                        <div className="relative shrink-0 flex items-center justify-center">
-                          <md-circular-progress
-                            value={m.nonprefetched_open_rate}
-                            style={{
-                              '--md-circular-progress-size': '54px',
-                              '--md-sys-color-primary': 'var(--color-primary)'
-                            } as React.CSSProperties}
-                          />
-                          <md-icon className="absolute text-[16px] text-primary">visibility</md-icon>
-                        </div>
-                      </div>
-
-                      {/* Spam Complaints */}
-                      <div className="bg-surface-container-low dark:bg-inverse-surface/10 rounded-[24px] p-5 shadow-none border border-outline-variant/65 flex items-center justify-between gap-4">
-                        <div className="flex-1 min-w-0">
-                          <h4 className="text-[11px] font-extrabold text-on-surface-variant/70 dark:text-inverse-on-surface/80 uppercase tracking-wide">Spam Complaints</h4>
-                          <p className="text-2xl font-black text-[#FFA524] mt-1">{spamPct}</p>
-                          <p className="text-[11px] text-on-surface-variant/65 mt-1 truncate">Unsub {(m.unsubscribe_rate * 100).toFixed(1)}%</p>
-                        </div>
-                        <div className="relative shrink-0 flex items-center justify-center">
-                          <md-circular-progress
-                            value={Math.min(1.0, m.spam_complaint_rate * 25)} // Scale slightly for visual prominence on very low rates
-                            style={{
-                              '--md-circular-progress-size': '54px',
-                              '--md-sys-color-primary': 'var(--color-heat-orange)'
-                            } as React.CSSProperties}
-                          />
-                          <md-icon className="absolute text-[16px] text-[#FFA524]">warning</md-icon>
-                        </div>
-                      </div>
+                      ))}
                     </motion.div>
                   );
                 })()}
@@ -1393,7 +1325,7 @@ export default function Investigation({
 
             {/* CONDITIONAL SECTIONS: Deliverability — panels go here, each with data-gem-panel + data-gem-panel-label */}
             {activeSection === 'Deliverability' && (
-              <motion.div {...md3Enter} transition={{ duration: 0.36, ease: md3Ease }} className="flex flex-col gap-6">
+              <motion.div {...md3Enter} transition={{ duration: 0.36, ease: md3Ease }} className="flex min-w-[545px] flex-col gap-6">
                 <DeliverabilityDiagnosticsDashboard
                   ticket={currentTicket}
                   dateRange={effectiveMetricRange}
@@ -1426,7 +1358,7 @@ export default function Investigation({
                 });
               };
               return (
-                <motion.div {...md3Enter} transition={{ duration: 0.36, ease: md3Ease }} className="flex flex-col gap-6">
+                <motion.div {...md3Enter} transition={{ duration: 0.36, ease: md3Ease }} className="flex min-w-[545px] flex-col gap-6">
                   <EmailPerformanceDashboard
                     rows={caseRows}
                     range={effectiveMetricRange}
@@ -1535,6 +1467,32 @@ export default function Investigation({
             )}
 
             <AnimatePresence>
+              {drillBackId && (
+                <motion.div
+                  initial={{ opacity: 0, y: 16 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 16 }}
+                  transition={{ type: 'spring', stiffness: 400, damping: 32 }}
+                  className="pointer-events-none fixed bottom-6 left-6 z-[60] md:left-[116px]"
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSelectTicket(drillBackId);
+                      onSectionChange('Support History');
+                      setDrillBackId(null);
+                    }}
+                    className="pointer-events-auto flex items-center gap-2 rounded-full bg-[#0B57D0] py-3 pl-4 pr-5 text-sm font-bold text-white shadow-[0_3px_8px_3px_rgba(32,33,36,0.18)]"
+                    aria-label={`Back to case ${drillBackId}`}
+                  >
+                    <span className="material-symbols-outlined text-[19px]">arrow_back</span>
+                    Back to {drillBackId}
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <AnimatePresence>
               {workspaceReviewBack && activeSection !== 'Workspace' && (
                 <motion.div
                   initial={{ opacity: 0, y: 16 }}
@@ -1568,11 +1526,10 @@ export default function Investigation({
   );
 }
 
-// Support History: all subsections stacked, navigated by a sticky floating
-// jumplinks bar (scrollspy + smooth jump) styled like the ticket-list floating filter.
+// Support History: stacked, left-aligned sections with a floating scrollspy navigator.
 function SupportHistoryView({ currentTicket, allCases, onDrill }: { currentTicket: CaseRecord; allCases: CaseRecord[]; onDrill?: (id: string) => void }) {
   type SectionKey = 'thread' | 'timeline' | 'relevant';
-  const segs: Array<{ key: SectionKey; label: string; icon: string }> = [
+  const sections: Array<{ key: SectionKey; label: string; icon: string }> = [
     { key: 'thread', label: 'Case thread', icon: 'forum' },
     { key: 'timeline', label: 'Account timeline', icon: 'history' },
     { key: 'relevant', label: 'Relevant cases', icon: 'manage_search' },
@@ -1581,99 +1538,226 @@ function SupportHistoryView({ currentTicket, allCases, onDrill }: { currentTicke
   const threadRef = useRef<HTMLElement | null>(null);
   const timelineRef = useRef<HTMLElement | null>(null);
   const relevantRef = useRef<HTMLElement | null>(null);
-  const refMap: Record<SectionKey, React.RefObject<HTMLElement | null>> = { thread: threadRef, timeline: timelineRef, relevant: relevantRef };
-  // While a jump is animating, ignore the scrollspy so the highlight doesn't flicker.
-  const lockRef = useRef(false);
-  const lockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refs: Record<SectionKey, React.RefObject<HTMLElement | null>> = { thread: threadRef, timeline: timelineRef, relevant: relevantRef };
+  const jumpLock = useRef(false);
+  const jumpTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    const obs = new IntersectionObserver(
-      entries => {
-        if (lockRef.current) return;
-        entries.forEach(e => {
-          if (e.isIntersecting) setActive((e.target as HTMLElement).dataset.key as SectionKey);
-        });
-      },
-      { rootMargin: '-104px 0px -55% 0px', threshold: 0 },
-    );
-    [threadRef, timelineRef, relevantRef].forEach(r => r.current && obs.observe(r.current));
-    return () => obs.disconnect();
+    const observer = new IntersectionObserver(entries => {
+      if (jumpLock.current) return;
+      entries.forEach(entry => {
+        if (entry.isIntersecting) setActive((entry.target as HTMLElement).dataset.key as SectionKey);
+      });
+    }, { rootMargin: '-104px 0px -55% 0px', threshold: 0 });
+    [threadRef, timelineRef, relevantRef].forEach(ref => ref.current && observer.observe(ref.current));
+    return () => observer.disconnect();
   }, []);
 
   const jump = (key: SectionKey) => {
     setActive(key);
-    lockRef.current = true;
-    if (lockTimer.current) clearTimeout(lockTimer.current);
-    refMap[key].current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    lockTimer.current = setTimeout(() => { lockRef.current = false; }, 800);
+    jumpLock.current = true;
+    if (jumpTimer.current) clearTimeout(jumpTimer.current);
+    refs[key].current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    jumpTimer.current = setTimeout(() => { jumpLock.current = false; }, 800);
   };
 
   return (
-    <div className="flex flex-col gap-20">
-      {/* Sticky floating jumplinks bar — Chrome jumplinks style matching Workspace nav */}
+    <div className="mx-auto flex w-full max-w-[1360px] flex-col gap-20 pb-16">
       <div className="sticky top-3 z-30 self-center -mb-10">
-        <div className="flex items-center gap-[3px] p-[6px] rounded-[100px] bg-white/95 dark:bg-[#28272E]/95 backdrop-blur-[12px] border border-[rgba(218,220,224,0.8)] dark:border-white/[0.08] shadow-[0_4px_20px_rgba(32,33,36,0.08),0_1px_4px_rgba(32,33,36,0.04)]">
-          {segs.map(s => {
-            const isActive = active === s.key;
+        <div className="flex items-center gap-[3px] rounded-[100px] border border-[rgba(218,220,224,0.8)] bg-white/95 p-[6px] shadow-[0_4px_20px_rgba(32,33,36,0.08),0_1px_4px_rgba(32,33,36,0.04)] backdrop-blur-[12px] dark:border-white/[0.08] dark:bg-[#28272E]/95">
+          {sections.map(section => {
+            const selected = active === section.key;
             return (
-              <button
-                key={s.key}
-                onClick={() => jump(s.key)}
-                className={cn(
-                  'relative flex items-center gap-1.5 px-[12px] h-8 rounded-[100px] text-[13px] font-[500] transition-all duration-200 select-none whitespace-nowrap',
-                  isActive
-                    ? 'text-[#1a73e8] dark:text-[#8AB4F8]'
-                    : 'text-[#5f6368] dark:text-white/60 hover:bg-[rgba(60,64,67,0.06)] hover:text-[#202124] dark:hover:text-white',
-                )}
-              >
-                {isActive && (
-                  <motion.div
-                    layoutId="sh-active-pill"
-                    className="absolute inset-0 bg-[#e8f0fe] dark:bg-[#1a73e8]/20 rounded-[100px]"
-                    transition={{ type: 'spring', stiffness: 500, damping: 38 }}
-                  />
-                )}
-                <span className="relative z-10 material-symbols-outlined" style={{ fontSize: '17px', fontVariationSettings: isActive ? "'FILL' 1" : '' }}>{s.icon}</span>
-                <span className="relative z-10">{s.label}</span>
+              <button key={section.key} type="button" onClick={() => jump(section.key)} className={cn('relative flex h-8 items-center gap-1.5 whitespace-nowrap rounded-[100px] px-3 text-[13px] font-medium transition-colors', selected ? 'text-[#1A73E8] dark:text-[#8AB4F8]' : 'text-[#5F6368] hover:bg-[#3C4043]/[0.06] dark:text-white/60')}>
+                {selected && <motion.span layoutId="support-history-nav" className="absolute inset-0 rounded-[100px] bg-[#E8F0FE] dark:bg-[#1A73E8]/20" transition={{ type: 'spring', stiffness: 500, damping: 38 }} />}
+                <span className="material-symbols-outlined relative z-10 text-[17px]" style={{ fontVariationSettings: selected ? "'FILL' 1" : '' }}>{section.icon}</span>
+                <span className="relative z-10">{section.label}</span>
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* Stacked subsections — each an anchor target for the jumplinks */}
-      <motion.section
-        ref={threadRef}
-        data-key="thread"
-        className="scroll-mt-[78px]"
-        {...md3Enter}
-        transition={{ duration: 0.34, ease: md3Ease, delay: 0.04 }}
-      >
-        <CaseThreadPanel
-          caseId={currentTicket.case_number}
-          accountName={currentTicket.account_name}
-          caseNumber={currentTicket.case_number}
-          messages={currentTicket.case_thread}
-        />
+      <motion.section ref={threadRef} data-key="thread" className="scroll-mt-[78px]" {...md3Enter} transition={{ duration: 0.34, ease: md3Ease, delay: 0.04 }}>
+        <h2 className="mb-7 text-left text-[35px] font-black tracking-tight text-[#202124] dark:text-inverse-on-surface">Case Thread</h2>
+        <div className="w-full">
+          <CaseThreadPanel caseId={currentTicket.case_number} accountName={currentTicket.account_name} caseNumber={currentTicket.case_number} messages={currentTicket.case_thread} />
+        </div>
       </motion.section>
-      <motion.section
-        ref={timelineRef}
-        data-key="timeline"
-        className="scroll-mt-[78px]"
-        {...md3Enter}
-        transition={{ duration: 0.34, ease: md3Ease, delay: 0.08 }}
-      >
-        <SupportHistorySection currentTicket={currentTicket} allCases={allCases} view="timeline" onDrill={onDrill} />
+
+      <motion.section ref={timelineRef} data-key="timeline" className="scroll-mt-[78px]" {...md3Enter} transition={{ duration: 0.34, ease: md3Ease, delay: 0.08 }}>
+        <h2 className="mb-7 text-left text-[35px] font-black tracking-tight text-[#202124] dark:text-inverse-on-surface">Account Timeline</h2>
+        <div className="w-full">
+          <AccountTimelinePanel currentTicket={currentTicket} allCases={allCases} onDrill={onDrill} />
+        </div>
       </motion.section>
-      <motion.section
-        ref={relevantRef}
-        data-key="relevant"
-        className="scroll-mt-[78px]"
-        {...md3Enter}
-        transition={{ duration: 0.34, ease: md3Ease, delay: 0.12 }}
-      >
-        <SupportHistorySection currentTicket={currentTicket} allCases={allCases} view="relevant" onDrill={onDrill} />
+
+      <motion.section ref={relevantRef} data-key="relevant" className="scroll-mt-[78px]" {...md3Enter} transition={{ duration: 0.34, ease: md3Ease, delay: 0.12 }}>
+        <h2 className="mb-7 text-left text-[35px] font-black tracking-tight text-[#202124] dark:text-inverse-on-surface">Relevant Cases</h2>
+        <div className="w-full">
+          <RelevantCasesPanel currentTicket={currentTicket} allCases={allCases} onDrill={onDrill} />
+        </div>
       </motion.section>
+    </div>
+  );
+}
+
+function formatHistoryDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function TimelineCaseAccordion({ ticket, active, index, open, onToggle, onDrill }: { ticket: CaseRecord; active: boolean; index: number; open: boolean; onToggle: () => void; onDrill?: (id: string) => void }) {
+  const pct = (value: number) => `${(value * 100).toFixed(1)}%`;
+
+  return (
+    <article className="overflow-hidden rounded-[24px] border border-[#E4E8F0] bg-[#FCFDFE] dark:border-white/10 dark:bg-inverse-surface/15">
+      <button type="button" onClick={onToggle} aria-expanded={open} className="flex w-full items-center gap-4 p-5 text-left">
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-primary">{active ? 'Current case' : `Previous case ${index}`}</span>
+            <span className="text-xs font-medium text-on-surface-variant">{ticket.case_number}</span>
+            <span className="rounded-lg bg-surface-container-highest px-2 py-0.5 text-[10px] font-bold text-on-surface-variant">{ticket.case_status}</span>
+          </span>
+          <span className="mt-1 block truncate text-[15px] font-bold text-on-surface dark:text-inverse-on-surface">{ticket.case_subject}</span>
+          <time className="mt-1 block text-[11px] text-on-surface-variant/75">{formatHistoryDate(ticket.case_created_at)}</time>
+        </span>
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={cn('h-7 w-7 shrink-0 text-primary transition-transform duration-300 ease-out', open && 'rotate-45')}>
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+      </button>
+      <div className={cn('grid transition-[grid-template-rows] duration-300 ease-out', open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]')}>
+        <div className="overflow-hidden">
+          <div className="border-t border-[#E4E8F0] bg-[#F8FAFD] p-5 dark:border-white/10 dark:bg-white/5">
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-[20px] border border-[#E9ECF2] bg-white p-4 dark:border-white/10 dark:bg-white/5">
+                <p className="text-[11px] font-bold text-on-surface">Root cause</p>
+                <p className="mt-2 text-[13px] leading-relaxed text-on-surface-variant">{ticket.root_cause_summary}</p>
+              </div>
+              <div className="rounded-[20px] border border-[#E9ECF2] bg-white p-4 dark:border-white/10 dark:bg-white/5">
+                <p className="text-[11px] font-bold text-on-surface">Resolution</p>
+                <p className="mt-2 text-[13px] leading-relaxed text-on-surface-variant">{ticket.resolution_summary || 'Resolution still in progress.'}</p>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-outline-variant/50 pt-4 text-[11px] font-semibold text-on-surface-variant">
+              <div className="flex flex-wrap gap-4"><span>Accepted {pct(ticket.metrics.accepted_rate)}</span><span>Bounce {pct(ticket.metrics.bounce_rate)}</span><span>Open {pct(ticket.metrics.nonprefetched_open_rate)}</span></div>
+              {!active && onDrill && <md-text-button onClick={() => onDrill(ticket.case_number)}>Open case<md-icon slot="icon">arrow_forward</md-icon></md-text-button>}
+            </div>
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function AccountTimelinePanel({ currentTicket, allCases, onDrill }: { currentTicket: CaseRecord; allCases: CaseRecord[]; onDrill?: (id: string) => void }) {
+  const events = [currentTicket, ...allCases.filter(ticket => ticket.account_id === currentTicket.account_id && ticket.case_number !== currentTicket.case_number)]
+    .sort((a, b) => new Date(b.case_created_at).getTime() - new Date(a.case_created_at).getTime());
+  const [openCaseNumber, setOpenCaseNumber] = useState<string | null>(currentTicket.case_number);
+
+  useEffect(() => {
+    setOpenCaseNumber(currentTicket.case_number);
+  }, [currentTicket.case_number]);
+
+  return (
+    <div data-gem-panel data-gem-panel-label="Account Timeline" className="overflow-hidden rounded-[28px] border border-[#E4E8F0] bg-[#F8FAFD] p-5 dark:border-white/10 dark:bg-inverse-surface/20 sm:p-6">
+      <div className="mb-7 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h3 className="text-[28px] font-black tracking-tight text-on-surface dark:text-inverse-on-surface">Case History Summary</h3>
+          <p className="mt-1 text-sm font-medium text-on-surface-variant">Root-cause history for <span className="font-bold text-on-surface dark:text-inverse-on-surface">{currentTicket.account_name}</span></p>
+        </div>
+        <span className="rounded-full border border-outline-variant/40 bg-white/70 px-3 py-1.5 text-xs font-bold text-on-surface-variant dark:bg-white/5">{events.length} {events.length === 1 ? 'case' : 'cases'}</span>
+      </div>
+
+      <div className="relative space-y-5">
+        <span className="absolute -bottom-6 left-[9px] top-8 border-l-2 border-dotted border-[#1A73E8]" aria-hidden="true" />
+        {events.map((ticket, index) => {
+          const active = ticket.case_number === currentTicket.case_number;
+          return (
+            <div key={ticket.case_number} className="relative grid grid-cols-[20px_minmax(0,1fr)] gap-4">
+              <span className="relative z-10 mt-7 h-5 w-5 rounded-full border-4 border-[#F8FAFD] bg-[#1A73E8] dark:border-[#343139]" />
+              <TimelineCaseAccordion
+                ticket={ticket}
+                active={active}
+                index={index}
+                open={openCaseNumber === ticket.case_number}
+                onToggle={() => setOpenCaseNumber(current => current === ticket.case_number ? null : ticket.case_number)}
+                onDrill={onDrill}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function RelevantCasesPanel({ currentTicket, allCases, onDrill }: { currentTicket: CaseRecord; allCases: CaseRecord[]; onDrill?: (id: string) => void }) {
+  const cases = rankRelevant(currentTicket, allCases.filter(ticket => ticket.account_id !== currentTicket.account_id)).slice(0, 5);
+  const pct = (value: number) => `${(value * 100).toFixed(1)}%`;
+
+  return (
+    <div data-gem-panel data-gem-panel-label="Relevant Cases" className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+      {cases.map(({ ticket, score, reasons }) => (
+        <article key={ticket.case_number} className="flex min-w-0 flex-col overflow-hidden rounded-[28px] border border-[#E4E8F0] bg-[#F8FAFD] shadow-[0_1px_2px_rgba(32,33,36,0.08)] dark:border-white/10 dark:bg-inverse-surface/15">
+          <div className="flex items-start gap-4 p-5 pb-4">
+            <div className="min-w-0 flex-1 pt-0.5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="truncate text-[16px] font-bold leading-tight text-on-surface dark:text-inverse-on-surface">{ticket.account_name}</h3>
+                  <p className="mt-1 text-[12px] font-medium text-on-surface-variant">Case {ticket.case_number}</p>
+                </div>
+                <span className="shrink-0 rounded-full bg-primary-container px-2.5 py-1 text-[11px] font-bold text-on-primary-container">{score}% match</span>
+              </div>
+              <p className="mt-3 text-[14px] font-medium leading-snug text-on-surface">{ticket.case_subject}</p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2 px-5 pb-4">
+            {reasons.map(reason => (
+              <span key={reason} className="inline-flex min-h-8 items-center rounded-lg border border-[#E1E5EC] bg-white px-3 py-1 text-[11px] font-medium text-on-surface-variant dark:border-white/10 dark:bg-white/5">{reason}</span>
+            ))}
+          </div>
+
+          <div className="mx-5 flex-1 rounded-[20px] border border-[#E9ECF2] bg-white p-4 dark:border-white/10 dark:bg-white/5">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[12px] font-bold text-on-surface">Root cause</p>
+              <span className="rounded-full bg-surface-container-highest px-2 py-0.5 text-[10px] font-bold text-on-surface-variant">{ticket.case_status}</span>
+            </div>
+            <p className="mt-2 line-clamp-4 text-[13px] leading-relaxed text-on-surface-variant">{ticket.root_cause_summary}</p>
+          </div>
+
+          {ticket.case_status === 'Closed' && ticket.resolution_summary && (
+            <div className="mx-5 mt-3 rounded-[20px] border border-[#DCE8E0] bg-[#F7FBF8] p-4 dark:border-green-900/40 dark:bg-green-950/10">
+              <p className="text-[12px] font-bold text-on-surface">Resolution</p>
+              <p className="mt-2 line-clamp-4 text-[13px] leading-relaxed text-on-surface-variant">{ticket.resolution_summary}</p>
+            </div>
+          )}
+
+          <div className="mx-5 mt-4 grid grid-cols-3 divide-x divide-outline-variant/60 border-y border-outline-variant/60 py-3 text-center">
+            <div><p className="text-[10px] font-medium text-on-surface-variant">Accepted</p><p className="mt-1 text-[14px] font-bold text-on-surface">{pct(ticket.metrics.accepted_rate)}</p></div>
+            <div><p className="text-[10px] font-medium text-on-surface-variant">Bounce</p><p className="mt-1 text-[14px] font-bold text-on-surface">{pct(ticket.metrics.bounce_rate)}</p></div>
+            <div><p className="text-[10px] font-medium text-on-surface-variant">Open</p><p className="mt-1 text-[14px] font-bold text-on-surface">{pct(ticket.metrics.nonprefetched_open_rate)}</p></div>
+          </div>
+
+          <div className="flex min-h-16 items-center px-5 py-3">
+            {onDrill && (
+              <md-filled-button
+                onClick={() => onDrill(ticket.case_number)}
+                style={{
+                  width: '100%',
+                  '--md-filled-button-container-color': '#0B57D0',
+                  '--md-filled-button-label-text-color': '#FFFFFF',
+                  '--md-filled-button-icon-color': '#FFFFFF',
+                } as React.CSSProperties}
+              >
+                View case
+                <md-icon slot="icon">arrow_forward</md-icon>
+              </md-filled-button>
+            )}
+          </div>
+        </article>
+      ))}
     </div>
   );
 }
@@ -1681,10 +1765,9 @@ function SupportHistoryView({ currentTicket, allCases, onDrill }: { currentTicke
 function SupportHistorySection({ currentTicket, allCases, view = 'all', onDrill }: { currentTicket: CaseRecord; allCases: CaseRecord[]; view?: 'all' | 'timeline' | 'relevant'; onDrill?: (id: string) => void }) {
   const account = currentTicket.account_name;
   const pastTickets = allCases.filter(c => c.account_id === currentTicket.account_id && c.case_number !== currentTicket.case_number);
-  const [expandedTimeline, setExpandedTimeline] = useState<string | null>(null);
-  const [expandedSimilar, setExpandedSimilar] = useState<string | null>(null);
   const showTimeline = view === 'all' || view === 'timeline';
   const showRelevant = view === 'all' || view === 'relevant';
+  const [expandedRelevant, setExpandedRelevant] = useState<string | null>(null);
 
   const crossAccount = allCases.filter(c => c.account_id !== currentTicket.account_id);
   const similarCases = rankRelevant(currentTicket, crossAccount).slice(0, 5);
@@ -1698,49 +1781,52 @@ function SupportHistorySection({ currentTicket, allCases, view = 'all', onDrill 
   };
 
   return (
-    <div className="flex flex-col gap-10 font-sans pb-10 px-4 sm:px-6" data-gem-panel data-gem-panel-label="Support History">
+    <div className="flex flex-col gap-6 font-sans pb-10" data-gem-panel data-gem-panel-label="Support History">
 
       {/* ── Timeline ── */}
       {showTimeline && (
-        <div className="flex flex-col gap-6">
-          <div className="flex items-center gap-3 select-none pb-2">
+        <div className="rounded-[28px] border border-outline-variant/35 bg-[#F3F5F9] p-5 shadow-none dark:bg-inverse-surface/30 sm:p-6">
+          <div className="mb-6 flex flex-wrap items-start justify-between gap-4 select-none">
             <div>
-              <span className="text-[10px] font-bold text-primary dark:text-[#8AB4F8] tracking-wider uppercase leading-none block mb-1">Timeline</span>
-              <h2 className="text-3xl font-black text-on-surface dark:text-inverse-on-surface tracking-tight">Support Timeline</h2>
-              <p className="text-xs text-on-surface-variant dark:text-inverse-on-surface/65 mt-1">History logs for {account}</p>
+              <h3 className="text-[28px] font-black tracking-tight text-on-surface dark:text-inverse-on-surface">Case History Summary</h3>
+              <div className="mt-1 flex items-center gap-1.5 text-sm font-medium text-on-surface-variant">
+                <span>root-cause context for</span>
+                <span className="font-bold text-on-surface dark:text-inverse-on-surface">{account}</span>
+              </div>
             </div>
+            <span className="flex items-center gap-1.5 pt-1 text-sm font-medium text-on-surface-variant/80">
+              <md-icon style={{ fontSize: '18px' } as React.CSSProperties}>history</md-icon>
+              {pastTickets.length + 1} recorded {pastTickets.length === 0 ? 'event' : 'events'}
+            </span>
           </div>
-          <md-divider />
-
-          <div className="flex flex-col gap-6 relative pl-6 before:content-[''] before:absolute before:left-2 before:top-4 before:bottom-4 before:w-0.5 before:bg-outline-variant/30">
+          <div className={cn('relative flex flex-col gap-10 pl-0 before:absolute before:bottom-[42px] before:left-2 before:top-7 before:border-l-2 before:border-dotted before:border-[#5F6368] sm:pl-12', pastTickets.length === 0 && 'before:hidden')}>
             {/* Pinned active case details card */}
             <div className="relative">
               {/* Timeline marker */}
-              <span className="absolute -left-6 top-1.5 w-4.5 h-4.5 rounded-full border-4 border-surface bg-[#1A73E8] dark:bg-[#8AB4F8] shrink-0" />
+              <span className="absolute -left-[3px] top-7 h-[18px] w-[18px] rounded-full border-[3px] border-white bg-[#3478D8] dark:border-[#202124] sm:-left-[39px]" />
               
-              <div className="flex flex-col gap-3">
-                <div className="flex items-center gap-3 flex-wrap">
-                  <span className="text-xs font-bold text-primary dark:text-[#8AB4F8]">Active Case</span>
-                  <span className="text-sm font-bold text-on-surface">{currentTicket.case_number}</span>
-                  <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded-full border whitespace-nowrap', statusBadge(currentTicket.case_status))}>
-                    {currentTicket.case_status}
-                  </span>
+              <div className="rounded-[20px] bg-[#F4F6F9] px-7 py-5 dark:bg-inverse-surface/25">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex min-w-0 items-center gap-4">
+                    <span className="text-[17px] font-black text-[#8C9197]">Active Case</span>
+                    <span className="truncate text-[16px] font-medium text-[#5F6368]">{currentTicket.case_number} | {currentTicket.case_subject}</span>
+                  </div>
+                  <span className="material-symbols-outlined shrink-0 text-[31px] text-[#92979C]">expand_more</span>
                 </div>
-                <h4 className="text-base font-bold text-on-surface leading-snug">{currentTicket.case_subject}</h4>
-                <div className="bg-surface-container-low dark:bg-inverse-surface/10 border border-outline-variant/30 rounded-2xl p-5 text-xs text-on-surface-variant leading-relaxed">
-                  <strong className="text-on-surface block mb-1">Current Root Cause</strong>
-                  {currentTicket.root_cause_summary}
+                <div className="mt-4 flex items-end justify-between gap-4">
+                  <span className={cn('inline-flex min-w-[128px] justify-center rounded-full bg-[#9DA1A3] px-4 py-1 text-[14px] font-black leading-none text-white', currentTicket.case_status === 'Closed' && 'bg-[#6E747A]')}>{currentTicket.case_status}</span>
+                  <div className="flex items-center gap-3 text-[11px] font-semibold text-[#777C82]">
+                    <span>Accepted: {pct(currentTicket.metrics.accepted_rate)}</span>
+                    <span>Bounce: {pct(currentTicket.metrics.bounce_rate)}</span>
+                    <span>Open: {pct(currentTicket.metrics.nonprefetched_open_rate)}</span>
+                  </div>
                 </div>
-                <div className="flex items-center justify-between text-[11px] text-on-surface-variant/85 px-1 mt-1 flex-wrap gap-2 select-none">
+                <p className="mt-3 line-clamp-1 text-[15px] font-medium text-[#5F6368]">{currentTicket.root_cause_summary}</p>
+                <div className="mt-3 flex items-center justify-between text-[11px] text-on-surface-variant/85 px-1 flex-wrap gap-2 select-none">
                   <div className="flex items-center gap-2">
                     <span>Opened {currentTicket.case_created_at}</span>
                     <span className="text-outline-variant/65">·</span>
                     <span>Owner: {currentTicket.case_owner}</span>
-                  </div>
-                  <div className="flex items-center gap-3 font-semibold">
-                    <span>Accepted: {pct(currentTicket.metrics.accepted_rate)}</span>
-                    <span>Bounce: {pct(currentTicket.metrics.bounce_rate)}</span>
-                    <span>Open: {pct(currentTicket.metrics.nonprefetched_open_rate)}</span>
                   </div>
                 </div>
               </div>
@@ -1750,24 +1836,17 @@ function SupportHistorySection({ currentTicket, allCases, view = 'all', onDrill 
             {pastTickets.map((t) => (
               <div key={t.case_number} className="relative">
                 {/* Timeline marker */}
-                <span className="absolute -left-6 top-6 w-4.5 h-4.5 rounded-full border-4 border-surface bg-outline-variant/60 shrink-0" />
+                <span className="absolute -left-[3px] top-7 h-[18px] w-[18px] rounded-full border-[3px] border-white bg-[#3478D8] dark:border-[#202124] sm:-left-[39px]" />
                 
-                <ChrAccordion
-                  id={t.case_number}
-                  isOpen={expandedTimeline === t.case_number}
-                  onToggle={(id) => setExpandedTimeline(prev => prev === id ? null : id)}
-                  heading={
-                    <span className="flex items-center gap-3 flex-wrap w-full pr-2 select-none text-left">
-                      <span className="text-sm font-bold text-on-surface-variant">{t.case_number}</span>
-                      <span className="text-outline-variant/50">·</span>
-                      <span className="text-sm font-bold text-on-surface dark:text-inverse-on-surface truncate max-w-[280px] sm:max-w-md">{t.case_subject}</span>
-                      <span className={cn('text-[9px] font-black px-2 py-0.5 rounded-full border ml-auto uppercase tracking-wide', statusBadge(t.case_status))}>
-                        {t.case_status}
-                      </span>
-                    </span>
-                  }
-                >
-                  <div className="flex flex-col gap-4 py-2">
+                <div className="rounded-[20px] bg-[#F4F6F9] px-7 py-5 dark:bg-inverse-surface/25">
+                  <div className="mb-4 flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[11px] font-black uppercase tracking-wider text-primary">Case {t.case_number}</p>
+                      <h3 className="mt-1 text-[15px] font-black leading-snug text-on-surface dark:text-inverse-on-surface">{t.case_subject}</h3>
+                    </div>
+                    <span className={cn('text-[9px] font-black px-2 py-0.5 rounded-full border uppercase tracking-wide', statusBadge(t.case_status))}>{t.case_status}</span>
+                  </div>
+                  <div className="flex flex-col gap-4">
                     <div className="flex items-center gap-2 text-[11px] text-on-surface-variant/75 select-none px-1">
                       <span>Opened: {t.case_created_at}</span>
                       <md-icon style={{ fontSize: '13px' }}>arrow_forward</md-icon>
@@ -1815,7 +1894,7 @@ function SupportHistorySection({ currentTicket, allCases, view = 'all', onDrill 
                       )}
                     </div>
                   </div>
-                </ChrAccordion>
+                </div>
               </div>
             ))}
           </div>
@@ -1828,37 +1907,26 @@ function SupportHistorySection({ currentTicket, allCases, view = 'all', onDrill 
 
       {/* ── Similar Cases ── */}
       {showRelevant && similarCases.length > 0 && (
-        <div className="flex flex-col gap-6 mt-4">
-          <div className="flex items-center gap-3 select-none pb-2">
-            <div>
-              <span className="text-[10px] font-bold text-primary dark:text-[#8AB4F8] tracking-wider uppercase leading-none block mb-1">Precedents</span>
-              <h2 className="text-3xl font-black text-on-surface dark:text-inverse-on-surface tracking-tight">Similar Cases</h2>
-              <p className="text-xs text-on-surface-variant dark:text-inverse-on-surface/65 mt-1">Contextually relevant diagnostic precedent from other accounts</p>
-            </div>
-          </div>
-          <md-divider />
-
+        <div>
           <div className="flex flex-col">
             {similarCases.map(({ ticket: t, score, reasons }) => (
               <ChrAccordion
                 key={t.case_number}
-                id={'sim-' + t.case_number}
-                isOpen={expandedSimilar === 'sim-' + t.case_number}
-                onToggle={(id) => setExpandedSimilar(prev => prev === id ? null : id)}
+                id={`relevant-${t.case_number}`}
+                isOpen={expandedRelevant === t.case_number}
+                onToggle={() => setExpandedRelevant(current => current === t.case_number ? null : t.case_number)}
                 heading={
-                  <span className="flex items-center gap-3 flex-wrap w-full pr-2 select-none text-left">
-                    <span className="text-sm font-bold text-on-surface-variant">{t.case_number}</span>
-                    <span className="text-outline-variant/50">·</span>
-                    <span className="text-sm font-bold text-on-surface dark:text-inverse-on-surface truncate max-w-[200px] sm:max-w-xs">{t.account_name}</span>
-                    <span className="text-xs font-bold text-[#1A73E8] dark:text-[#8AB4F8] select-none">• {score}% match</span>
-                    <span className={cn('text-[9px] font-black px-2 py-0.5 rounded-full border ml-auto uppercase tracking-wide', statusBadge(t.case_status))}>
-                      {t.case_status}
-                    </span>
+                  <span className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 pr-2">
+                    <span className="font-medium text-[#202124] dark:text-inverse-on-surface">{t.account_name}</span>
+                    <span className="text-[13px] text-[#5F6368] dark:text-inverse-on-surface/65">Case {t.case_number}</span>
+                    <span className="text-[13px] text-[#1A73E8]">{score}% match</span>
+                    <span className={cn('ml-auto text-[9px] font-black px-2 py-0.5 rounded-full border uppercase tracking-wide', statusBadge(t.case_status))}>{t.case_status}</span>
                   </span>
                 }
               >
-                <div className="flex flex-col gap-4 py-2">
-                  <p className="text-[14px] font-bold text-on-surface leading-snug px-1">{t.case_subject}</p>
+              <div className="rounded-[20px] bg-[#F4F6F9] px-7 py-5 dark:bg-inverse-surface/25">
+                <div className="mt-4 flex flex-col gap-4">
+                  <p className="text-[14px] font-bold text-on-surface leading-snug">{t.case_subject}</p>
                   
                   <div className="flex items-center gap-1.5 flex-wrap px-1">
                     {reasons.map((reason: string) => (
@@ -1892,6 +1960,7 @@ function SupportHistorySection({ currentTicket, allCases, view = 'all', onDrill 
                     )}
                   </div>
                 </div>
+              </div>
               </ChrAccordion>
             ))}
           </div>

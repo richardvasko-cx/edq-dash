@@ -7,6 +7,63 @@ import { randomUUID } from 'crypto';
 import { exec, spawn } from "child_process";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
+import { GEMINI_BENCHMARK_POLICY } from './src/services/deliverabilityBenchmarks';
+
+type CheckMxStatus = 'critical' | 'warning' | 'info' | 'success';
+
+function decodeCheckMxHtml(value: string) {
+  return value
+    .replace(/<br\s*\/?\s*>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseGoogleCheckMx(domain: string, html: string) {
+  const statusMap: Record<string, CheckMxStatus> = {
+    err: 'critical',
+    warn: 'warning',
+    info: 'info',
+    ok: 'success',
+  };
+  const rowPattern = /<div class="[^"]*checkmx-result-row-(err|warn|info|ok)[^"]*">/g;
+  const rows = [...html.matchAll(rowPattern)];
+  const checks = rows.flatMap((row, index) => {
+    const start = row.index ?? 0;
+    const end = rows[index + 1]?.index ?? html.length;
+    const chunk = html.slice(start, end);
+    const titleMatch = chunk.match(/<div class="checkmx-test-name">([\s\S]*?)<\/div>/);
+    if (!titleMatch) return [];
+    const helpMatch = chunk.match(/<a href="([^"]+)"[^>]*>\s*Help center article/i);
+    const detailMatch = chunk.match(/additional-info-notification">([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/);
+    const title = decodeCheckMxHtml(titleMatch[1]);
+    return [{
+      id: `google-checkmx-${index}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}`,
+      status: statusMap[row[1]],
+      title,
+      detail: detailMatch ? decodeCheckMxHtml(detailMatch[1]) : undefined,
+      helpUrl: helpMatch ? new URL(helpMatch[1], 'https://toolbox.googleapps.com').toString() : undefined,
+    }];
+  });
+  const pageText = decodeCheckMxHtml(html);
+  const hasCritical = checks.some(check => check.status === 'critical');
+  const hasWarnings = checks.some(check => check.status === 'warning');
+  const mxRecords = [...html.matchAll(/class=['"]checkmx-mx-priority['"][^>]*>\s*(\d+)[\s\S]*?class=['"]checkmx-mx-name['"][^>]*>\s*([^<\s][^<]*?)\s*</g)]
+    .map(match => ({ priority: Number(match[1]), host: decodeCheckMxHtml(match[2]) }))
+    .filter(record => Number.isFinite(record.priority) && record.host);
+  const summary = hasCritical
+    ? 'There were critical problems detected with this domain. Mail flow is probably affected.'
+    : hasWarnings
+      ? 'There were configuration warnings detected with this domain. Review the recommendations below.'
+      : 'No critical mail-flow problems were detected with this domain.';
+  return { domain, summary: pageText.includes('critical problems detected') ? summary : 'Google CheckMX completed its domain checks.', checks, mxRecords, hasCritical, hasWarnings };
+}
 
 const geminiApiKey = process.env.GEMINI_API_KEY || '';
 if (!geminiApiKey) {
@@ -1668,6 +1725,25 @@ async function startServer() {
     }
   });
 
+  app.get('/api/google-checkmx', async (req, res) => {
+    const domain = String(req.query.domain || '').trim().toLowerCase().replace(/^https?:\/\//, '').split('/')[0].replace(/\.$/, '');
+    if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(domain)) {
+      return res.status(400).json({ error: 'Enter a valid domain name.' });
+    }
+    try {
+      const response = await fetch(`https://toolbox.googleapps.com/apps/checkmx/check?domain=${encodeURIComponent(domain)}`, {
+        headers: { 'User-Agent': 'EDQ Dashboard CheckMX integration' },
+      });
+      if (!response.ok) throw new Error(`Google CheckMX returned ${response.status}`);
+      const html = await response.text();
+      const report = parseGoogleCheckMx(domain, html);
+      if (!report.checks.length) throw new Error('Google CheckMX did not return any checks for this domain.');
+      res.json({ report });
+    } catch (error: any) {
+      res.status(502).json({ error: error?.message || 'Google CheckMX request failed.' });
+    }
+  });
+
   app.post('/api/dns/auth-scan', async (req, res) => {
     try {
       const scan = await runAuthenticationScan(req.body?.ticket || {}, { force: req.body?.force === true });
@@ -2079,6 +2155,8 @@ ${APP_ACTION_GUIDANCE}
 
 ${INVESTIGATION_WORKSPACE_POLICY}
 
+${GEMINI_BENCHMARK_POLICY}
+
 SOURCE DISCIPLINE — only rely on a User Guide excerpt when it directly answers the user's subject. For questions about navigating or using this dashboard's User Guide, use the live app context and APP MAP; do not infer product navigation from unrelated Braze articles. Never imply that every retrieved source was used.
 ${sourceAttestation}
 
@@ -2282,6 +2360,8 @@ ${APP_FEATURE_CONTEXT}
 ${APP_ACTION_GUIDANCE}
 
 ${INVESTIGATION_WORKSPACE_POLICY}
+
+${GEMINI_BENCHMARK_POLICY}
 
 SOURCE DISCIPLINE — only rely on a User Guide excerpt when it directly answers the user's subject. For questions about navigating or using this dashboard's User Guide, use the live app context and APP MAP; do not infer product navigation from unrelated Braze articles. Never imply that every retrieved source was used.
 ${sourceAttestation}

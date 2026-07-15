@@ -748,39 +748,6 @@ h1, h2, h3, h4, h5, h6 {
   .gemini-pill-loading-glow, .gemini-pill-loading-glow::after { animation: none; opacity: 0.4; }
 }
 
-/* ── Get Started panel: Gemini-style glow while the CTA button is hovered ── */
-.getstarted-glow,
-.getstarted-glow::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  border-radius: 0.75rem;
-  background: conic-gradient(from var(--gem-angle),
-    #4285F4, #7C3AED, #DB2777, #F97316, #4285F4);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-          mask-composite: exclude;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-}
-.getstarted-glow { padding: 2px; filter: blur(2px) saturate(1.5) brightness(1.1); }
-.getstarted-glow::after { padding: 16px; filter: blur(22px) saturate(1.8) brightness(1.2); }
-.getstarted-panel:has(.getstarted-cta:hover) .getstarted-glow {
-  opacity: 1;
-  animation: gemini-loading-sweep 1.8s linear infinite;
-}
-.getstarted-panel:has(.getstarted-cta:hover) .getstarted-glow::after {
-  opacity: 0.6;
-  animation: gemini-loading-sweep 1.8s linear infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .getstarted-panel:has(.getstarted-cta:hover) .getstarted-glow,
-  .getstarted-panel:has(.getstarted-cta:hover) .getstarted-glow::after { animation: none; }
-}
-
 /* Workspace Gemini panel: one Google-colour edge only. The colour never
    fills the card; while Gemini is thinking, the same edge casts a soft glow
    outside the panel. */
@@ -1041,6 +1008,11 @@ button.app-action-inline-chip:hover {
   min-width: 0;
 }
 
+.atglance-wide-panels {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
 #root .atglance-daily-brief :where(div, span, h1, h2) {
   overflow-wrap: normal;
   word-break: normal;
@@ -1078,6 +1050,18 @@ button.app-action-inline-chip:hover {
 
   .atglance-daily-brief {
     order: 0;
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .atglance-control-surface {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .atglance-wide-panels {
+    grid-column: 1 / -1;
+    grid-row: 2;
   }
 
   .atglance-split {
@@ -1093,7 +1077,7 @@ button.app-action-inline-chip:hover {
   }
 
   .atglance-daily-brief {
-    min-height: 720px;
+    min-height: 0;
     padding: 28px 24px;
   }
 }
@@ -1118,20 +1102,35 @@ button.app-action-inline-chip:hover {
    usable dashboard width. Full = no drawer or a very wide viewport; mid = the
    Gemini-sharing layout; compact = one-column fallback. */
 .atglance-full-layout .atglance-shell {
-  grid-template-columns: minmax(0, 1fr) 440px;
+  grid-template-columns: minmax(0, 1.3fr) minmax(400px, 0.7fr);
 }
 
 .atglance-full-layout .atglance-daily-brief {
   order: 0;
-  min-height: 720px;
-  padding: 32px 28px;
+  grid-column: 2;
+  grid-row: 1;
+  min-height: 0;
+  padding: 24px 22px;
+}
+
+.atglance-full-layout .atglance-control-surface {
+  display: contents;
+}
+
+.atglance-full-layout .atglance-wide-panels {
+  grid-column: 1 / -1;
+  grid-row: 3;
 }
 
 .atglance-full-layout .dashboard-kpi-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-column: 1;
+  grid-row: 1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .atglance-full-layout .atglance-split {
+  grid-column: 1 / -1;
+  grid-row: 2;
   grid-template-columns: minmax(0, 1.35fr) minmax(290px, 0.9fr);
 }
 
@@ -1149,15 +1148,33 @@ button.app-action-inline-chip:hover {
 
 .atglance-mid-layout .atglance-daily-brief {
   order: 0;
-  min-height: 720px;
+  grid-column: 2;
+  grid-row: 1;
+  min-height: 0;
   padding: 28px 24px;
 }
 
+.atglance-mid-layout .atglance-control-surface {
+  display: contents;
+}
+
+.atglance-mid-layout .atglance-wide-panels {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+
 .atglance-mid-layout .dashboard-kpi-grid {
+  grid-column: 1;
+  grid-row: 1;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.atglance-mid-layout .atglance-split,
+.atglance-mid-layout .atglance-split {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .atglance-mid-layout .atglance-demand-grid,
 .atglance-mid-layout .atglance-review-grid {
   grid-template-columns: minmax(0, 1fr);
@@ -1165,6 +1182,26 @@ button.app-action-inline-chip:hover {
 
 .atglance-compact-layout .dashboard-kpi-grid {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.atglance-wide-panels {
+  display: grid;
+  gap: 20px;
+}
+
+.atglance-full-layout .dashboard-kpi-grid > .dashboard-summary-panel {
+  grid-column: auto;
+  min-height: 0;
+}
+
+.atglance-mid-layout .dashboard-kpi-grid > .dashboard-summary-panel {
+  grid-column: auto;
+  min-height: 0;
+}
+
+.atglance-compact-layout .dashboard-kpi-grid > .dashboard-summary-panel {
+  grid-column: auto;
+  aspect-ratio: auto;
 }
 
 /* Current reporting-board layout. The explicit width state accounts for Gemini
@@ -1360,6 +1397,16 @@ button.app-action-inline-chip:active {
   .ipw-results-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+.dashboard-panel-filter {
+  width: 220px;
+  flex: 0 0 220px;
+}
+
+.dashboard-panel-filter > button {
+  width: 100%;
+  justify-content: space-between;
 }
 
 /* ── MD3 State Layers ── */

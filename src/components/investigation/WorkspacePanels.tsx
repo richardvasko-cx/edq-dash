@@ -14,7 +14,6 @@ import { marked } from 'marked';
 import { cn } from '../../App';
 import GeminiIcon from '../GeminiIcon';
 import MarkdownContent from '../MarkdownContent';
-import WorkspaceIntro from './WorkspaceIntro';
 import { AiPanelContext } from '../../contexts/AiPanel';
 import { type CaseRecord, isClosedCase } from '../../services/caseDataset';
 import { useCaseDataset } from '../../hooks/useCaseDataset';
@@ -33,6 +32,7 @@ import {
   type WorkspacePanelStatus,
 } from '../../services/workspaceDependencies';
 import { buildWorkspaceSuggestions } from '../../services/workspaceContent';
+import { DELIVERABILITY_BENCHMARKS } from '../../services/deliverabilityBenchmarks';
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -236,7 +236,7 @@ function informationRequestsFor(ticket: CaseRecord | null): InformationRequest[]
     });
   }
 
-  const complaintIssue = /\b(complaint|spam complaint|feedback|fbl|user feedback)\b/.test(evidence) || m.spam_complaint_rate >= 0.001;
+  const complaintIssue = /\b(complaint|spam complaint|feedback|fbl|user feedback)\b/.test(evidence) || m.spam_complaint_rate >= DELIVERABILITY_BENCHMARKS.spamComplaintRate.targetMaximum;
   const complaintCauseKnown = hasThreadAnswer(allEvidence, /\b(consent|preference|frequency|content|dormant|inactive|complaint increase is concentrated|cohort|suppression|reintroduced)\b/);
   if (complaintIssue && !complaintCauseKnown) {
     requests.push({
@@ -640,9 +640,9 @@ function detectContradictions(draft: string, t: CaseRecord, baseline = ''): Cont
     const problems: string[] = [];
     if (anyNotPass) { problems.push(`authentication is not fully passing (SPF ${t.spf_status}, DKIM ${t.dkim_status}, DMARC ${t.dmarc_status})`); kinds.add('auth'); }
     if (top) { problems.push(`active bounce/defer signal "${top.reason}" at ${top.domain}`); kinds.add('bounce'); }
-    if (t.metrics.accepted_rate < 0.95) { problems.push(`delivery is below target (${pct(t.metrics.accepted_rate)})`); kinds.add('delivery'); }
-    if (t.metrics.bounce_rate > 0.02) { problems.push(`bounce rate is elevated (${pct(t.metrics.bounce_rate)})`); kinds.add('delivery'); }
-    if (t.metrics.spam_complaint_rate > 0.001) { problems.push(`spam complaints are elevated (${pct(t.metrics.spam_complaint_rate)})`); kinds.add('engagement'); }
+    if (t.metrics.accepted_rate < DELIVERABILITY_BENCHMARKS.deliveryRate.healthy) { problems.push(`delivery is below the 99% operating target (${pct(t.metrics.accepted_rate)})`); kinds.add('delivery'); }
+    if (t.metrics.bounce_rate > DELIVERABILITY_BENCHMARKS.bounceRate.investigate) { problems.push(`bounce rate needs investigation (${pct(t.metrics.bounce_rate)})`); kinds.add('delivery'); }
+    if (t.metrics.spam_complaint_rate >= DELIVERABILITY_BENCHMARKS.spamComplaintRate.targetMaximum) { problems.push(`spam complaints exceed the 0.10% target (${pct(t.metrics.spam_complaint_rate)})`); kinds.add('engagement'); }
     if (problems.length) {
       claims.push('the case is resolved / healthy');
       corrections.push(`the case still has active problems: ${problems.join('; ')}`);
@@ -653,8 +653,8 @@ function detectContradictions(draft: string, t: CaseRecord, baseline = ''): Cont
   return { claims, correction: corrections.join('; '), kinds: Array.from(kinds) };
 }
 
-// Compact past-ticket card for the Support History Context panel visual header.
-// Mirrors the expanded row style of SupportHistorySection but without the timeline rail.
+// Past-ticket card for the Support History Context panel. This intentionally
+// mirrors the light, segmented historical-case cards in Support History.
 function HistoryCard({ ticket: h }: { ticket: CaseRecord }) {
   const [open, setOpen] = useState(false);
   const statusBadge = (s: string) =>
@@ -662,42 +662,51 @@ function HistoryCard({ ticket: h }: { ticket: CaseRecord }) {
     : s === 'Open' ? 'bg-[#E8F0FE] text-[#1A73E8] border-[#D2E3FC] dark:bg-[#1A73E8]/15 dark:border-[#1A73E8]/30 dark:text-[#8AB4F8]'
     : 'bg-[#FEF7E0] text-[#9A6700] border-[#FDE293] dark:bg-[#F59E0B]/15 dark:border-[#F59E0B]/30 dark:text-[#FBD38D]';
   return (
-    <div className="rounded-xl border border-outline-variant/20 bg-surface-variant/20 dark:bg-inverse-surface/15 overflow-hidden">
+    <div className="overflow-hidden rounded-md border border-[#D2D7DE] bg-[#FBFCFD] dark:border-outline-variant/40 dark:bg-inverse-surface/15">
       <button
         onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left group"
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
       >
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-[11.5px] font-bold text-on-surface shrink-0">{h.case_number}</span>
-          <span className="text-outline/30 shrink-0">·</span>
-          <span className="text-[11.5px] text-on-surface-variant truncate">{h.case_subject}</span>
+        <div className="min-w-0">
+          <span className="block text-[12px] font-bold text-primary">{h.case_number}</span>
+          <span className="mt-0.5 block truncate text-[13px] font-semibold text-on-surface">{h.case_subject}</span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <span className={cn('text-[9.5px] font-black px-2 py-0.5 rounded-full border', statusBadge(h.case_status))}>{h.case_status}</span>
-          <span className={cn('material-symbols-outlined text-[16px] text-outline transition-transform duration-200', open && 'rotate-180')}>expand_more</span>
+          <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={cn('h-7 w-7 shrink-0 text-[#1A73E8] transition-transform duration-300 ease-out', open && 'rotate-45')}>
+            <path d="M12 5v14M5 12h14" />
+          </svg>
         </div>
       </button>
-      {open && (
-        <div className="px-3 pb-3 flex flex-col gap-2 border-t border-outline-variant/15">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
-            <div className="bg-surface-variant/40 dark:bg-inverse-surface/20 rounded-xl p-3">
+      <div className={cn('grid transition-[grid-template-rows] duration-300 ease-out', open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]')}>
+        <div className="overflow-hidden">
+          <div className="grid grid-cols-1 border-t border-dotted border-[#DDE1E7] sm:grid-cols-2 dark:border-outline-variant/30">
+            <div className="border-b border-dotted border-[#DDE1E7] bg-[#FBFCFD] p-4 sm:border-b-0 sm:border-r dark:border-outline-variant/30 dark:bg-inverse-surface/15">
               <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant/60 mb-1">Root cause</p>
               <p className="text-[12px] text-on-surface-variant leading-relaxed">{h.root_cause_summary}</p>
             </div>
             {h.resolution_summary && (
-              <div className="bg-[#E6F4EA]/60 dark:bg-[#137333]/10 border border-[#C8E6C9]/50 dark:border-[#137333]/20 rounded-xl p-3">
+              <div className="bg-[#FBFCFD] p-4 dark:bg-inverse-surface/15">
                 <p className="text-[9px] font-black uppercase tracking-widest text-[#137333]/70 dark:text-[#81C995]/70 mb-1">Resolution</p>
                 <p className="text-[12px] text-[#137333] dark:text-[#81C995] leading-relaxed">{h.resolution_summary}</p>
               </div>
             )}
           </div>
-          <div className="flex items-center gap-3 text-[10.5px] text-outline/70">
-            <span>Delivery {pct(h.metrics.accepted_rate)}</span>
-            <span>Bounce {pct(h.metrics.bounce_rate)}</span>
-            <span>Open {pct(h.metrics.nonprefetched_open_rate)}</span>
-          </div>
         </div>
-      )}
+      </div>
+      <div className="grid grid-cols-3 border-t border-dotted border-[#DDE1E7] dark:border-outline-variant/30">
+        {[
+          ['Accepted', pct(h.metrics.accepted_rate)],
+          ['Bounce', pct(h.metrics.bounce_rate)],
+          ['Open', pct(h.metrics.nonprefetched_open_rate)],
+        ].map(([label, value], index) => (
+          <div key={label} className={cn('px-2 py-2.5 text-center', index > 0 && 'border-l border-dotted border-[#DDE1E7] dark:border-outline-variant/30')}>
+            <div className="text-[9px] font-bold uppercase tracking-wide text-on-surface-variant/65">{label}</div>
+            <div className="mt-0.5 text-[14px] font-black text-on-surface">{value}</div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -899,7 +908,8 @@ export default function WorkspacePanels({ ticket, onJumpSection, onJumpPanel }: 
           `Issue context for matching: "${t.case_subject}" — ${t.root_cause_summary} (tags: ${(t.tags || []).join(', ')}).\n` +
           `Using the SIMILAR PAST CASES provided in your context (this account at full fidelity, other accounts anonymised), surface precedent. ` +
           `Start with one italic line exactly: "_All cross-account precedents are anonymised — no other customer's identifiers are shown._" ` +
-          `Then 2–4 bullets, one per precedent: "**<short case label>** — Root cause: <…>; Resolution: <what fixed it>." ` +
+          `Then 2–4 bullets, one per precedent: "**<short anonymised case label>** — Context: <why this precedent matches the current issue>; Root cause: <…>; Resolution: <what fixed it>." ` +
+          `Keep each field concise. The interface will add the real match score and outcome metrics from the grounded ticket record, so do not invent or repeat percentages. ` +
           `Do not invent precedents; if none are provided, say so in one line.` + consultantContext
         );
       case 'recommendedActions': {
@@ -1615,7 +1625,7 @@ export default function WorkspacePanels({ ticket, onJumpSection, onJumpPanel }: 
         if (!past.length) return null;
         return (
           <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-on-surface-variant/50">
+            <div className="flex items-center gap-1.5 text-[12px] font-bold text-on-surface-variant/65">
               <span className="material-symbols-outlined text-[13px]">person</span>
               {t.account_name} — current account history
             </div>
@@ -1685,17 +1695,7 @@ export default function WorkspacePanels({ ticket, onJumpSection, onJumpPanel }: 
         "Accept a step to continue; at the end you'll have a ready-to-send customer response.",
       ];
       return (
-        <div className="flex flex-col gap-6 pt-1">
-          {/* Gemini-style glow — animates while the Get started button is hovered */}
-          <span className="getstarted-glow" aria-hidden="true" />
-          <div className="flex justify-center pt-1">
-            <button
-              onClick={() => doAccept('gettingStarted')}
-              className="getstarted-cta flex items-center gap-2 px-9 py-3 bg-[#1A73E8] text-white rounded-full text-[16px] font-bold hover:bg-[#1967D2] transition-colors shadow-[0_2px_8px_rgba(26,115,232,0.35)]"
-            >
-              Get started
-            </button>
-          </div>
+        <div className="flex flex-col gap-6 pt-4 pb-8">
           <ul className="flex flex-col gap-2.5 max-w-2xl mx-auto w-full pb-1">
             {lines.map((l, i) => (
               <li key={i} className="flex items-start gap-2.5 text-[14px] text-on-surface-variant dark:text-inverse-on-surface/85 leading-relaxed">
@@ -1704,6 +1704,12 @@ export default function WorkspacePanels({ ticket, onJumpSection, onJumpPanel }: 
               </li>
             ))}
           </ul>
+          <button
+            onClick={() => doAccept('gettingStarted')}
+            className="getstarted-cta absolute left-1/2 top-[calc(100%+14px)] z-20 flex h-12 -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full bg-[#1A73E8] px-9 text-[16px] font-bold text-white shadow-[0_2px_8px_rgba(26,115,232,0.35)] transition-colors hover:bg-[#1967D2]"
+          >
+            Get started
+          </button>
         </div>
       );
     }
@@ -1763,16 +1769,22 @@ export default function WorkspacePanels({ ticket, onJumpSection, onJumpPanel }: 
     const header = renderVisualHeader(id);
     const def = WORKSPACE_PANELS.find(p => p.id === id);
 
-    // Support History Context: parse AI bullets into root cause + resolution cards.
-    // AI output format: "**Label** — Root cause: <text>; Resolution: <text>."
+    // Support History Context: parse the grounded narrative into the same light,
+    // segmented historical-case design used by Support History itself.
     // The italic disclaimer line is rendered separately above the cards.
     const renderHistoryCards = (content: string) => {
       const lines = content.split('\n');
       const disclaimer = lines.find(l => /cross-account precedents are anon/i.test(l))?.replace(/^[_*]+|[_*]+$/g, '').trim();
-      const items: Array<{ label: string; rootCause: string; resolution: string }> = [];
+      const items: Array<{ label: string; context?: string; rootCause: string; resolution: string }> = [];
       for (const line of lines) {
-        const m = line.match(/^[-*]\s+\*{1,2}(.+?)\*{1,2}\s*[—–-]+\s*Root cause:\s*([^;]+?);\s*Resolution:\s*(.+?)\.?\s*$/i);
-        if (m) items.push({ label: m[1].trim(), rootCause: m[2].trim(), resolution: m[3].trim() });
+        const current = line.match(/^[-*]\s+\*{1,2}(.+?)\*{1,2}\s*[—–-]+\s*Context:\s*([^;]+?);\s*Root cause:\s*([^;]+?);\s*Resolution:\s*(.+?)\.?\s*$/i);
+        if (current) {
+          items.push({ label: current[1].trim(), context: current[2].trim(), rootCause: current[3].trim(), resolution: current[4].trim() });
+          continue;
+        }
+        // Preserve already-generated answers saved in the older two-field format.
+        const legacy = line.match(/^[-*]\s+\*{1,2}(.+?)\*{1,2}\s*[—–-]+\s*Root cause:\s*([^;]+?);\s*Resolution:\s*(.+?)\.?\s*$/i);
+        if (legacy) items.push({ label: legacy[1].trim(), rootCause: legacy[2].trim(), resolution: legacy[3].trim() });
       }
       if (!items.length) return <MarkdownContent className={proseCls} content={content} />;
 
@@ -1784,34 +1796,51 @@ export default function WorkspacePanels({ ticket, onJumpSection, onJumpPanel }: 
 
       return (
         <div className="flex flex-col gap-3">
-          <div className="flex items-center gap-1.5 pt-1 text-[9px] font-black uppercase tracking-widest text-on-surface-variant/50">
-            <span className="material-symbols-outlined text-[13px]">group</span>
-            Related accounts
+          <div className="flex items-center pt-1 text-[13px] font-bold text-on-surface-variant/70">
+            Related historical cases
             {disclaimer && <span className="ml-auto text-[9px] font-normal normal-case tracking-normal italic text-on-surface-variant/50">{disclaimer}</span>}
           </div>
           {items.map((item, i) => {
-            const score = ranked[i]?.score;
+            const matched = ranked[i];
+            const score = matched?.score;
+            const metrics = matched?.ticket.metrics;
             return (
-              <div key={i} className="rounded-xl border border-outline-variant/20 bg-surface-variant/10 dark:bg-inverse-surface/10 overflow-hidden">
-                <div className="px-3 py-2 border-b border-outline-variant/15 flex items-center gap-2">
-                  <span className="material-symbols-outlined text-[14px] text-outline/50">history</span>
-                  <span className="text-[12px] font-bold text-on-surface flex-1">{item.label}</span>
+              <div key={i} className="overflow-hidden rounded-md border border-[#D2D7DE] bg-[#FBFCFD] dark:border-outline-variant/40 dark:bg-inverse-surface/10">
+                <div className="flex items-start gap-3 border-b border-dotted border-[#DDE1E7] px-4 py-3 dark:border-outline-variant/30">
+                  <div className="min-w-0 flex-1">
+                    <span className="block text-[13px] font-bold text-on-surface">{item.label}</span>
+                    {item.context && <span className="mt-1 block text-[11px] leading-relaxed text-on-surface-variant">{item.context}</span>}
+                  </div>
                   {score != null && (
-                    <span className="text-[9.5px] font-black px-2 py-0.5 rounded bg-[#E8F0FE] text-[#1A73E8] dark:bg-[#1A73E8]/15 dark:text-[#8AB4F8]">
+                    <span className="shrink-0 rounded-full bg-[#E8F0FE] px-2.5 py-1 text-[9.5px] font-black text-[#1A73E8] dark:bg-[#1A73E8]/15 dark:text-[#8AB4F8]">
                       {score}% match
                     </span>
                   )}
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-px bg-outline-variant/10">
-                  <div className="bg-surface-variant/30 dark:bg-inverse-surface/15 p-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2">
+                  <div className="border-b border-dotted border-[#DDE1E7] bg-[#FBFCFD] p-4 sm:border-b-0 sm:border-r dark:border-outline-variant/30 dark:bg-inverse-surface/15">
                     <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant/60 mb-1.5">Root cause</p>
                     <p className="text-[12px] text-on-surface-variant dark:text-inverse-on-surface/80 leading-relaxed">{item.rootCause}</p>
                   </div>
-                  <div className="bg-[#E6F4EA]/50 dark:bg-[#137333]/10 p-3">
+                  <div className="bg-[#FBFCFD] p-4 dark:bg-inverse-surface/15">
                     <p className="text-[9px] font-black uppercase tracking-widest text-[#137333]/60 dark:text-[#81C995]/60 mb-1.5">Resolution</p>
                     <p className="text-[12px] text-[#137333] dark:text-[#81C995] leading-relaxed">{item.resolution}</p>
                   </div>
                 </div>
+                {metrics && (
+                  <div className="grid grid-cols-3 border-t border-dotted border-[#DDE1E7] dark:border-outline-variant/30">
+                    {[
+                      ['Accepted', pct(metrics.accepted_rate)],
+                      ['Bounce', pct(metrics.bounce_rate)],
+                      ['Open', pct(metrics.nonprefetched_open_rate)],
+                    ].map(([label, value], metricIndex) => (
+                      <div key={label} className={cn('px-2 py-2.5 text-center', metricIndex > 0 && 'border-l border-dotted border-[#DDE1E7] dark:border-outline-variant/30')}>
+                        <div className="text-[9px] font-bold uppercase tracking-wide text-on-surface-variant/65">{label}</div>
+                        <div className="mt-0.5 text-[14px] font-black text-on-surface">{value}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -1852,35 +1881,18 @@ export default function WorkspacePanels({ ticket, onJumpSection, onJumpPanel }: 
     );
   };
 
-  const flow = WORKSPACE_PANELS.filter(p => !p.isIntro);
+  const flow = WORKSPACE_PANELS;
   const activeNav = navActiveId ?? currentId ?? flow[0].id;
   return (
     <AnimatePresence mode="wait">
-      {!started ? (
-        <motion.div
-          key="ws-splash"
-          initial={{ opacity: 0, scale: 0.98 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, y: -24, transition: { duration: 0.25 } }}
-          transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
-          className="w-full flex items-center justify-center"
-          data-gem-panel data-gem-panel-label="Workspace" data-gem-panel-content={`Workspace resolution flow for ${ticket?.case_number ?? ''} — ${ticket?.account_name ?? ''}`}
-        >
-          <WorkspaceIntro 
-            onStart={() => doAccept('gettingStarted')} 
-            ticketNumber={ticket?.case_number}
-            accountName={ticket?.account_name}
-          />
-        </motion.div>
-      ) : (
-        <motion.div
-          key="ws-flow"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.2 }}
-          className="flex flex-col gap-4"
-          data-gem-panel data-gem-panel-label="Workspace" data-gem-panel-content={`Workspace resolution flow for ${ticket?.case_number ?? ''} — ${ticket?.account_name ?? ''}`}
-        >
+      <motion.div
+        key="ws-flow"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.2 }}
+        className="flex flex-col gap-4"
+        data-gem-panel data-gem-panel-label="Workspace" data-gem-panel-content={`Workspace resolution flow for ${ticket?.case_number ?? ''} — ${ticket?.account_name ?? ''}`}
+      >
           {needsInformation ? (
             <section className="mx-auto w-full max-w-[1180px] rounded-[26px] bg-[#F4F7FB] px-8 py-7 dark:bg-[#F4F7FB] text-[#02060A]">
               <div className="flex items-end justify-between gap-6 pr-7">
@@ -2102,7 +2114,7 @@ export default function WorkspacePanels({ ticket, onJumpSection, onJumpPanel }: 
                 data-gem-panel-content={st.content ? `${p.title}: ${st.content.slice(0, 800)}` : `${p.title} — not yet generated`}
                 className={cn(
                 'rounded-xl p-5 transition-all relative',
-                p.isIntro && 'getstarted-panel relative',
+                p.isIntro && 'getstarted-panel relative mx-auto w-full max-w-[740px]',
                 panelThinking && 'workspace-gemini-shell workspace-gemini-shell-thinking',
                 finalComplete && 'workspace-gemini-shell workspace-gemini-shell-complete',
                 isCurrent ? (isFinalPanel ? 'border-0 bg-white dark:bg-inverse-surface/40 shadow-[0_1px_3px_rgba(26,115,232,0.12)]' : 'border-2 border-[#1A73E8] bg-white dark:bg-inverse-surface/40 shadow-[0_1px_3px_rgba(26,115,232,0.12)]') :
@@ -2352,9 +2364,9 @@ export default function WorkspacePanels({ ticket, onJumpSection, onJumpPanel }: 
               </div>
               {/* Dotted connector — creates a clean runway between cards; green if done, gray otherwise */}
               {!isLast && (
-                <div className="flex justify-center">
+                <div className={cn('relative', p.isIntro && 'pt-7')}>
                   <div className={cn(
-                    'w-px border-l-2 border-dashed',
+                    'relative left-1/2 w-px -translate-x-1/2 border-l-2 border-dashed',
                     isDone ? 'border-[#137333]/50 dark:border-[#81C995]/40' : 'border-outline-variant/60 dark:border-outline-variant/40',
                   )} style={{ height: `${WORKSPACE_NAV_GAP}px` }} />
                 </div>
@@ -2370,8 +2382,7 @@ export default function WorkspacePanels({ ticket, onJumpSection, onJumpPanel }: 
       </div>
             </>
           )}
-        </motion.div>
-      )}
+      </motion.div>
     </AnimatePresence>
   );
 }

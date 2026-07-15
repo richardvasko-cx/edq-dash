@@ -231,7 +231,7 @@ export default function ChartsOverview() {
                   <Tooltip {...CHART_TOOLTIP} cursor={CHART_CURSOR} formatter={(v: number) => [fmtPct(v), 'Inbox rate']} />
                   <Bar dataKey="inbox_rate" radius={CHART_BAR_RADIUS} name="inbox_rate">
                     {placementRows.map((row, i) => (
-                      <Cell key={i} fill={row.inbox_rate >= 0.9 ? BRAND.purple : row.inbox_rate >= 0.75 ? BRAND.orange : BRAND.orangeDark} />
+                      <Cell key={i} fill={BRAND.purple} />
                     ))}
                   </Bar>
                 </BarChart>

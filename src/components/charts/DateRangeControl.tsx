@@ -109,8 +109,14 @@ export default function DateRangeControl({ dates, value, onChange, className }: 
     ];
   }, [dates, min, max]);
 
-  const label = value.from === min && value.to === max
-    ? 'Last 30 days'
+  const lastSevenFrom = dates[Math.max(0, dates.length - 7)] || min;
+  const lastFourteenFrom = dates[Math.max(0, dates.length - 14)] || min;
+  const label = value.from === lastSevenFrom && value.to === max
+    ? 'Last 7 days'
+    : value.from === lastFourteenFrom && value.to === max
+      ? 'Last 14 days'
+    : value.from === min && value.to === max
+      ? 'Last 30 days'
     : value.from === value.to ? fmt(value.from) : `${fmt(value.from)} – ${fmt(value.to)}`;
 
   const getDaysInMonth = (month: Date) => {

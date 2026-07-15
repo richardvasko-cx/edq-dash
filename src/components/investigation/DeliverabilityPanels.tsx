@@ -48,6 +48,7 @@ import {
 import { normalizeMta, providerDisplayName } from '../../services/providerRouting';
 import type { BounceDetail, CaseRecord } from '../../data';
 import type { HistoricalMetricRecord } from '../../services/historicalMetricsDataset';
+import { DELIVERABILITY_BENCHMARKS } from '../../services/deliverabilityBenchmarks';
 
 const BRAZE_ORANGE_LIGHT = '#FFD4BC';
 const BRAZE_ORANGE = '#FFA524';
@@ -173,6 +174,19 @@ type DeliverabilityPanelFilterKey =
   | 'rawDeferrals';
 
 type DeliverabilityPanelKey = DeliverabilityPanelFilterKey;
+type DeliverabilitySubview = 'delivery' | 'bounces' | 'deferrals';
+
+const DELIVERABILITY_SUBVIEWS: Array<{ id: DeliverabilitySubview; label: string; icon: string }> = [
+  { id: 'delivery', label: 'Delivery', icon: 'monitoring' },
+  { id: 'bounces', label: 'Bounces', icon: 'report' },
+  { id: 'deferrals', label: 'Deferrals', icon: 'schedule' },
+];
+
+const DELIVERABILITY_SUBVIEW_PANELS: Record<DeliverabilitySubview, DeliverabilityPanelKey[]> = {
+  delivery: ['volume', 'deliveries', 'ipVolume', 'ispSummary', 'eventTypes'],
+  bounces: ['bounceTrend', 'bounceClassOverall', 'bounceClassByIsp', 'bounceReason'],
+  deferrals: ['deferralTrend', 'deferralReason', 'deferralIsp', 'rawDeferrals'],
+};
 
 const PANEL_FILTER_DEFAULTS: Record<DeliverabilityPanelFilterKey, DeliverabilitySharedFilters> = {
   volume: EMPTY_DELIVERABILITY_SHARED_FILTERS,
@@ -1715,6 +1729,7 @@ export function DeliverabilityDiagnosticsDashboard({
   const [filterContext, setFilterContext] = useState<DeliverabilityPanelFilterKey | null>(null);
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [editMode, setEditMode] = useState(false);
+  const [deliverabilitySubview, setDeliverabilitySubview] = useState<DeliverabilitySubview>('delivery');
   const [hiddenPanels, setHiddenPanels] = useState<Set<DeliverabilityPanelKey>>(() => new Set());
   const providerMetricCatalog = useMemo(() => getMetricCatalogForProvider(ticket.email_service_provider), [ticket.email_service_provider]);
   const providerMasterMetrics = useMemo(() => makeMasterMetrics(providerMetricCatalog), [providerMetricCatalog]);
@@ -1779,6 +1794,7 @@ export function DeliverabilityDiagnosticsDashboard({
     setFilterContext(null);
     setCustomizeOpen(false);
     setEditMode(false);
+    setDeliverabilitySubview('delivery');
   }, [ticket.case_number, ticket.email_service_provider]);
 
   useEffect(() => {
@@ -1942,6 +1958,8 @@ export function DeliverabilityDiagnosticsDashboard({
   const activeResourceFilterCount = (Object.keys(masterResourceFilters) as ResourceKey[])
     .reduce((total, key) => total + masterResourceFilters[key].length, 0);
   const isPanelVisible = (key: DeliverabilityPanelKey) => !hiddenPanels.has(key);
+  const isPanelInActiveView = (key: DeliverabilityPanelKey) => DELIVERABILITY_SUBVIEW_PANELS[deliverabilitySubview].includes(key);
+  const isPanelVisibleInActiveView = (key: DeliverabilityPanelKey) => isPanelInActiveView(key) && isPanelVisible(key);
   const hidePanel = (key: DeliverabilityPanelKey) => {
     setHiddenPanels(current => {
       const next = new Set(current);
@@ -2219,91 +2237,91 @@ export function DeliverabilityDiagnosticsDashboard({
     {
       key: 'volume',
       title: 'Volume by day',
-      description: 'Provider mix by daily delivery volume.',
+      description: 'Delivery section. Provider mix by daily delivery volume.',
       visible: isPanelVisible('volume'),
       preview: <StaticCustomizePreview title="Volume by day" kind="bars" theme="dark" bars={volumePreviewBars} />,
     },
     {
       key: 'deliveries',
       title: 'Deliveries by day',
-      description: 'Daily delivery totals.',
+      description: 'Delivery section. Daily delivery totals.',
       visible: isPanelVisible('deliveries'),
       preview: <StaticCustomizePreview title="Deliveries by day" kind="table" tableColumns={deliveriesPreviewColumns} tableRows={deliveriesPreviewRows} />,
     },
     {
       key: 'ipVolume',
       title: 'Volume per IP pool & IP address',
-      description: 'Delivery totals by pool and address.',
+      description: 'Delivery section. Delivery totals by pool and address.',
       visible: isPanelVisible('ipVolume'),
       preview: <StaticCustomizePreview title="Volume per IP pool & IP address" kind="table" tableColumns={ipPreviewColumns} tableRows={ipPreviewRows} />,
     },
     {
       key: 'ispSummary',
       title: 'Sent vs. Delivered vs. Bounces (top 20)',
-      description: 'Mailbox-provider delivery quality.',
+      description: 'Delivery section. Mailbox-provider delivery quality.',
       visible: isPanelVisible('ispSummary'),
       preview: <StaticCustomizePreview title="Sent vs. Delivered vs. Bounces" kind="table" tableColumns={ispPreviewColumns} tableRows={ispPreviewRows} />,
     },
     {
       key: 'eventTypes',
       title: 'Event types over time',
-      description: 'Selected event metrics over the active date range.',
+      description: 'Delivery section. Selected event metrics over the active date range.',
       visible: isPanelVisible('eventTypes'),
       preview: <StaticCustomizePreview title="Event types over time" kind="bars" theme="dark" bars={eventPreviewBars} line />,
     },
     {
       key: 'deferralTrend',
       title: 'Deliveries vs. Deferrals',
-      description: 'Accepted mail versus temporary deferrals.',
+      description: 'Deferrals section. Accepted mail versus temporary deferrals.',
       visible: isPanelVisible('deferralTrend'),
       preview: <StaticCustomizePreview title="Deliveries vs. Deferrals" kind="bars" theme="dark" bars={deferralPreviewBars} line />,
     },
     {
       key: 'bounceTrend',
       title: 'Deliveries vs. Hardbounces over time',
-      description: 'Daily delivery area with hardbounce baseline.',
+      description: 'Bounces section. Daily delivery area with hardbounce baseline.',
       visible: isPanelVisible('bounceTrend'),
       preview: <StaticCustomizePreview title="Deliveries vs. Hardbounces" kind="bars" theme="dark" bars={bouncePreviewBars} line />,
     },
     {
       key: 'bounceClassOverall',
       title: 'Bounce Class Overall',
-      description: 'Bounce classes excluding deferrals.',
+      description: 'Bounces section. Bounce classes excluding deferrals.',
       visible: isPanelVisible('bounceClassOverall'),
       preview: <StaticCustomizePreview title="Bounce Class Overall" kind="table" tableColumns={bounceClassPreviewColumns} tableRows={bounceClassPreviewRows} />,
     },
     {
       key: 'bounceClassByIsp',
       title: 'Bounce Class by ISP',
-      description: 'Class and ISP distribution.',
+      description: 'Bounces section. Class and ISP distribution.',
       visible: isPanelVisible('bounceClassByIsp'),
       preview: <StaticCustomizePreview title="Bounce Class by ISP" kind="pie" theme="dark" pieSlices={ispRowsScoped.map(row => row.name)} />,
     },
     {
       key: 'bounceReason',
       title: 'Bounce Class by ISP and Reason',
-      description: 'Top bounce reason rows by count.',
+      description: 'Bounces section. Top bounce reason rows by count.',
       visible: isPanelVisible('bounceReason'),
       preview: <StaticCustomizePreview title="Bounce Class by ISP and Reason" kind="table" tableColumns={reasonPreviewColumns} tableRows={bounceReasonPreviewRows} />,
     },
     {
       key: 'deferralReason',
       title: 'Deferrals by ISP and Reason',
-      description: 'Temporary delivery failures and rate-limit responses.',
+      description: 'Deferrals section. Temporary delivery failures and rate-limit responses.',
       visible: isPanelVisible('deferralReason'),
       preview: <StaticCustomizePreview title="Deferrals by ISP and Reason" kind="table" tableColumns={reasonPreviewColumns} tableRows={deferralReasonPreviewRows} />,
     },
     {
       key: 'deferralIsp',
       title: 'Deferred Events by ISP',
-      description: 'Mailbox providers contributing temporary failures.',
+      description: 'Deferrals section. Mailbox providers contributing temporary failures.',
       visible: isPanelVisible('deferralIsp'),
       preview: <StaticCustomizePreview title="Deferred Events by ISP" kind="pie" theme="dark" pieSlices={deferralIspRowsScoped.map(row => row.name)} />,
     },
     {
       key: 'rawDeferrals',
       title: 'Deferred Events - Raw Discover table',
-      description: 'Raw-style rows behind the deferral distribution.',
+      description: 'Deferrals section. Raw-style rows behind the deferral distribution.',
       visible: isPanelVisible('rawDeferrals'),
       preview: <StaticCustomizePreview title="Deferred Events - Raw Discover table" kind="table" tableColumns={rawDeferralsPreviewColumns} tableRows={rawDeferralsPreviewRows} />,
     },
@@ -2323,35 +2341,61 @@ export function DeliverabilityDiagnosticsDashboard({
 
   return (
     <div className="flex flex-col gap-7">
-      <div className="sticky top-0 z-30 -mt-3 flex justify-end gap-2 py-2.5 pointer-events-none">
-        <div className="pointer-events-auto">{dateControl}</div>
-        <button
-          type="button"
-          onClick={() => {
-            setFilterContext(null);
-            setMainFilterOpen(true);
-          }}
-          className="pointer-events-auto flex h-12 items-center gap-2 rounded-full border border-outline-variant/40 bg-white px-4 text-[13px] font-semibold text-on-surface shadow-[0_6px_18px_rgba(32,33,36,0.12)] transition-colors md3-state-layer hover:bg-[#F8FAFF] dark:bg-[#201F24] dark:text-inverse-on-surface dark:hover:bg-[#2A2930]"
-        >
-          <span className="material-symbols-outlined text-[18px] text-on-surface-variant">tune</span>
-          <span className="shrink-0">Metrics &amp; filters</span>
-          {globalActionCount > 0 && (
-            <span className="ml-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[#801ED7] px-1.5 text-[10px] font-black leading-none text-white">
-              {globalActionCount}
-            </span>
-          )}
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            setEditMode(true);
-            setCustomizeOpen(true);
-          }}
-          className="pointer-events-auto inline-flex h-12 w-12 items-center justify-center rounded-full bg-[#D2E3FC] text-[#3C4043] transition-colors md3-state-layer hover:bg-[#C4D7F6]"
-          aria-label="Customize panels"
-        >
-          <span className="material-symbols-outlined text-[24px]">edit</span>
-        </button>
+      <div className="sticky top-0 z-30 -mt-3 flex flex-wrap items-center justify-between gap-2 bg-transparent py-2.5 pointer-events-none">
+        <div className="pointer-events-auto -my-2 shrink-0 px-2 py-2">
+          <nav aria-label="Deliverability views" className="flex w-max items-center gap-[3px] overflow-visible rounded-[100px] border border-[rgba(218,220,224,0.8)] bg-white p-[6px] shadow-[0_4px_20px_rgba(32,33,36,0.08),0_1px_4px_rgba(32,33,36,0.04)] dark:border-white/[0.08] dark:bg-[#28272E]">
+            {DELIVERABILITY_SUBVIEWS.map(item => {
+              const active = deliverabilitySubview === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setDeliverabilitySubview(item.id)}
+                  className={cn(
+                    'relative flex h-8 shrink-0 items-center gap-1.5 rounded-[100px] px-[12px] text-[13px] font-[500] transition-all duration-200 select-none whitespace-nowrap',
+                    active
+                      ? 'bg-[#E8F0FE] text-[#1A73E8] dark:bg-[#1A73E8]/20 dark:text-[#8AB4F8]'
+                      : 'text-[#5F6368] hover:bg-[rgba(60,64,67,0.06)] hover:text-[#202124] dark:text-white/70 dark:hover:bg-white/8 dark:hover:text-white'
+                  )}
+                  aria-current={active ? 'page' : undefined}
+                >
+                  <span className="material-symbols-outlined text-[16px] leading-none">{item.icon}</span>
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+        </div>
+        <div className="pointer-events-auto ml-auto flex shrink-0 items-center justify-end gap-2">
+          <div>{dateControl}</div>
+          <button
+            type="button"
+            onClick={() => {
+              setFilterContext(null);
+              setMainFilterOpen(true);
+            }}
+            className="flex h-12 items-center gap-2 rounded-full border border-outline-variant/40 bg-white px-4 text-[13px] font-semibold text-on-surface shadow-[0_6px_18px_rgba(32,33,36,0.12)] transition-colors md3-state-layer hover:bg-[#F8FAFF] dark:bg-[#201F24] dark:text-inverse-on-surface dark:hover:bg-[#2A2930]"
+          >
+            <span className="material-symbols-outlined text-[18px] text-on-surface-variant">tune</span>
+            <span className="shrink-0">Metrics &amp; filters</span>
+            {globalActionCount > 0 && (
+              <span className="ml-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[#801ED7] px-1.5 text-[10px] font-black leading-none text-white">
+                {globalActionCount}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setEditMode(true);
+              setCustomizeOpen(true);
+            }}
+            className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-[#D2E3FC] text-[#3C4043] transition-colors md3-state-layer hover:bg-[#C4D7F6]"
+            aria-label="Customize panels"
+          >
+            <span className="material-symbols-outlined text-[24px]">edit</span>
+          </button>
+        </div>
         <MetricsFilterSheet
           key={filterContext ?? 'global-deliverability'}
           open={mainFilterOpen}
@@ -2413,21 +2457,21 @@ export function DeliverabilityDiagnosticsDashboard({
         subtitle="Provider mix by daily delivery volume"
         icon={Globe2}
         actions={panelActions('volume', ['query'])}
-        className={cn(!isPanelVisible('volume') && 'hidden')}
+        className={cn(!isPanelVisibleInActiveView('volume') && 'hidden')}
         motionDelay={0.04}
         {...editProps('volume')}
       >
         <TrendMetricChart rows={volumeTrendRowsScoped} metricKeys={volumeMetricSelection} masterMetrics={providerMasterMetrics} height={260} />
       </Panel>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+      <div className="flex flex-col gap-6">
         <Panel
           title="Deliveries by day"
           subtitle="Daily delivery totals"
           icon={MailCheck}
           theme="light"
           actions={panelActions('deliveries', ['query'])}
-          className={cn(!isPanelVisible('deliveries') && 'hidden')}
+          className={cn(!isPanelVisibleInActiveView('deliveries') && 'hidden')}
           motionDelay={0.08}
           {...editProps('deliveries')}
         >
@@ -2444,7 +2488,7 @@ export function DeliverabilityDiagnosticsDashboard({
           icon={Server}
           theme="light"
           actions={panelActions('ipVolume', ['pool', 'ip', 'query'])}
-          className={cn(!isPanelVisible('ipVolume') && 'hidden')}
+          className={cn(!isPanelVisibleInActiveView('ipVolume') && 'hidden')}
           motionDelay={0.12}
           {...editProps('ipVolume')}
         >
@@ -2466,7 +2510,7 @@ export function DeliverabilityDiagnosticsDashboard({
         icon={TableProperties}
         theme="light"
         actions={panelActions('ispSummary', ['isp', 'query'])}
-        className={cn(!isPanelVisible('ispSummary') && 'hidden')}
+        className={cn(!isPanelVisibleInActiveView('ispSummary') && 'hidden')}
         motionDelay={0.16}
         {...editProps('ispSummary')}
       >
@@ -2489,10 +2533,10 @@ export function DeliverabilityDiagnosticsDashboard({
                 <span className="font-bold">{row.isp}</span>,
                 formatInt(row.sent),
                 formatInt(row.delivered),
-                <span className={cn('font-bold', row.deliveredRate < 0.98 ? 'text-[#FFA524]' : 'text-emerald-600 dark:text-emerald-450')}>{formatPct(row.deliveredRate)}</span>,
+                <span className={cn('font-bold', row.deliveredRate < DELIVERABILITY_BENCHMARKS.deliveryRate.healthy ? 'text-[#FFA524]' : 'text-emerald-600 dark:text-emerald-450')}>{formatPct(row.deliveredRate)}</span>,
                 formatPct(row.hardbounces),
                 formatPct(row.reputationBlocks),
-                <span className={cn('font-bold', row.others > 0.02 ? 'text-red-650 dark:text-red-400' : '')}>{formatPct(row.others)}</span>,
+                <span className={cn('font-bold', row.others > DELIVERABILITY_BENCHMARKS.bounceRate.investigate ? 'text-red-650 dark:text-red-400' : '')}>{formatPct(row.others)}</span>,
               ])}
           sum={isAmazonSes
             ? filteredSesIspRows.reduce((sum, row) => sum + row.sent, 0)
@@ -2500,7 +2544,7 @@ export function DeliverabilityDiagnosticsDashboard({
         />
       </Panel>
 
-      <LazyDeliverabilityPanel visible={isPanelVisible('eventTypes')} resetKey={`${ticket.case_number}:eventTypes`} minHeight={500}>
+      <LazyDeliverabilityPanel visible={isPanelVisibleInActiveView('eventTypes')} resetKey={`${ticket.case_number}:eventTypes`} minHeight={500}>
         <div className="relative overflow-visible">
           <MasterDeliverabilityPanel
             rows={eventTypesRowsScoped}
@@ -2512,7 +2556,7 @@ export function DeliverabilityDiagnosticsDashboard({
       </LazyDeliverabilityPanel>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <LazyDeliverabilityPanel visible={isPanelVisible('deferralTrend')} resetKey={`${ticket.case_number}:deferralTrend`}>
+        <LazyDeliverabilityPanel visible={isPanelVisibleInActiveView('deferralTrend')} resetKey={`${ticket.case_number}:deferralTrend`}>
           <Panel
           title="Deliveries vs. Deferrals"
           subtitle="Accepted mail versus temporary deferral responses"
@@ -2525,7 +2569,7 @@ export function DeliverabilityDiagnosticsDashboard({
           </Panel>
         </LazyDeliverabilityPanel>
 
-        <LazyDeliverabilityPanel visible={isPanelVisible('bounceTrend')} resetKey={`${ticket.case_number}:bounceTrend`}>
+        <LazyDeliverabilityPanel visible={isPanelVisibleInActiveView('bounceTrend')} resetKey={`${ticket.case_number}:bounceTrend`}>
           <Panel
           title="Deliveries vs. Hardbounces over time"
           subtitle="Daily delivery area with hardbounce baseline"
@@ -2540,7 +2584,7 @@ export function DeliverabilityDiagnosticsDashboard({
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <LazyDeliverabilityPanel visible={isPanelVisible('bounceClassOverall')} resetKey={`${ticket.case_number}:bounceClassOverall`}>
+        <LazyDeliverabilityPanel visible={isPanelVisibleInActiveView('bounceClassOverall')} resetKey={`${ticket.case_number}:bounceClassOverall`}>
           <Panel
             title="Bounce Class Overall"
             subtitle="Excluding deferrals"
@@ -2561,7 +2605,7 @@ export function DeliverabilityDiagnosticsDashboard({
           </Panel>
         </LazyDeliverabilityPanel>
 
-        <LazyDeliverabilityPanel visible={isPanelVisible('bounceClassByIsp')} resetKey={`${ticket.case_number}:bounceClassByIsp`} minHeight={455}>
+        <LazyDeliverabilityPanel visible={isPanelVisibleInActiveView('bounceClassByIsp')} resetKey={`${ticket.case_number}:bounceClassByIsp`} minHeight={455}>
           <Panel
             title="Bounce Class by ISP"
             subtitle="Inner ring: class. Outer ring: ISP and class."
@@ -2600,7 +2644,7 @@ export function DeliverabilityDiagnosticsDashboard({
         </LazyDeliverabilityPanel>
       </div>
 
-      <LazyDeliverabilityPanel visible={isPanelVisible('bounceReason')} resetKey={`${ticket.case_number}:bounceReason`}>
+      <LazyDeliverabilityPanel visible={isPanelVisibleInActiveView('bounceReason')} resetKey={`${ticket.case_number}:bounceReason`}>
         <Panel
           title="Bounce Class by ISP and Reason"
           subtitle="Top reason rows by count"
@@ -2623,7 +2667,7 @@ export function DeliverabilityDiagnosticsDashboard({
         </Panel>
       </LazyDeliverabilityPanel>
 
-      <LazyDeliverabilityPanel visible={isPanelVisible('deferralReason')} resetKey={`${ticket.case_number}:deferralReason`}>
+      <LazyDeliverabilityPanel visible={isPanelVisibleInActiveView('deferralReason')} resetKey={`${ticket.case_number}:deferralReason`}>
         <Panel
           title="Deferrals by ISP and Reason"
           subtitle="Temporary delivery failures and rate-limit responses"
@@ -2646,7 +2690,7 @@ export function DeliverabilityDiagnosticsDashboard({
         </Panel>
       </LazyDeliverabilityPanel>
 
-      <LazyDeliverabilityPanel visible={isPanelVisible('deferralIsp')} resetKey={`${ticket.case_number}:deferralIsp`} minHeight={420}>
+      <LazyDeliverabilityPanel visible={isPanelVisibleInActiveView('deferralIsp')} resetKey={`${ticket.case_number}:deferralIsp`} minHeight={420}>
         <Panel
           title="Deferred Events by ISP"
           subtitle="Mailbox providers contributing temporary failures"
@@ -2681,7 +2725,7 @@ export function DeliverabilityDiagnosticsDashboard({
         </Panel>
       </LazyDeliverabilityPanel>
 
-      <LazyDeliverabilityPanel visible={isPanelVisible('rawDeferrals')} resetKey={`${ticket.case_number}:rawDeferrals`}>
+      <LazyDeliverabilityPanel visible={isPanelVisibleInActiveView('rawDeferrals')} resetKey={`${ticket.case_number}:rawDeferrals`}>
         <Panel
           title="Deferred Events - Raw Discover table"
           subtitle="Raw-style rows behind the deferral distribution"
