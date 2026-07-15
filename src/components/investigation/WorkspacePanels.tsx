@@ -113,6 +113,13 @@ function saveWorkspace(id: string | null | undefined, data: PersistedWorkspace) 
   if (!id || typeof sessionStorage === 'undefined') return;
   try { sessionStorage.setItem(WS_STORE_KEY(id), JSON.stringify(data)); } catch { /* quota / serialization — non-fatal */ }
 }
+function validGeneratedPanels(saved: PersistedWorkspace | null): WorkspacePanelId[] {
+  return (saved?.autoGen ?? []).filter(id => {
+    if (id === 'gettingStarted') return true;
+    const content = saved?.state?.[id]?.content?.trim() ?? '';
+    return Boolean(content) && content !== 'No response.' && !content.startsWith('⚠️');
+  });
+}
 function savedInformationGateIsCurrent(saved: PersistedWorkspace | null) {
   return saved?.informationGateVersion === INFORMATION_GATE_VERSION;
 }
@@ -790,9 +797,9 @@ export default function WorkspacePanels({ ticket, onJumpSection, onJumpPanel }: 
   // Reactive set of panels whose AI pass has finished — drives the per-panel
   // "preparing / generating / ready" status shown on locked (background) panels.
   // Seeded from saved autoGen so restored panels read as already done.
-  const [pregenDone, setPregenDone] = useState<Set<WorkspacePanelId>>(() => new Set(loadWorkspace(ticket?.case_number)?.autoGen ?? []));
+  const [pregenDone, setPregenDone] = useState<Set<WorkspacePanelId>>(() => new Set(validGeneratedPanels(loadWorkspace(ticket?.case_number))));
   const genStartRef = useRef(0);
-  const autoGenRef = useRef<Set<WorkspacePanelId>>(new Set(loadWorkspace(ticket?.case_number)?.autoGen ?? []));
+  const autoGenRef = useRef<Set<WorkspacePanelId>>(new Set(validGeneratedPanels(loadWorkspace(ticket?.case_number))));
   // Guards the one-shot background pre-generation queue (kicked off on Get started).
   const pregenStartedRef = useRef(false);
   // Bounded per-panel regeneration retries (so a failed gen recovers but a down model
@@ -814,8 +821,9 @@ export default function WorkspacePanels({ ticket, onJumpSection, onJumpPanel }: 
     setInformationDetail('');
     setWorkspaceUpdate(null);
     setAuthCheck(null);
-    autoGenRef.current = new Set(saved?.autoGen ?? []);
-    setPregenDone(new Set(saved?.autoGen ?? []));
+    const validAutoGen = validGeneratedPanels(saved);
+    autoGenRef.current = new Set(validAutoGen);
+    setPregenDone(new Set(validAutoGen));
     retryCountRef.current = {};
     pregenStartedRef.current = false; // re-arm background pre-gen for the new ticket
     setGen({ id: null, phase: 'loading', streamText: '' });
@@ -1031,6 +1039,10 @@ export default function WorkspacePanels({ ticket, onJumpSection, onJumpPanel }: 
       }
     } catch (e: any) {
       answer = `⚠️ Could not reach Gemini: ${e.message}`;
+    }
+    answer = answer.trim();
+    if (!answer || answer === 'No response.') {
+      answer = '⚠️ Gemini returned an empty Workspace section. Please retry.';
     }
     setGen({ id: null, phase: 'loading', streamText: '' });
     // Generation failed (model unreachable / overflow / stream error). Don't keep a
