@@ -6,6 +6,8 @@ import fs from "fs";
 import { randomUUID } from 'crypto';
 import { exec, spawn } from "child_process";
 import { GoogleGenAI } from "@google/genai";
+import mammoth from 'mammoth';
+import * as XLSX from 'xlsx';
 import { GEMINI_BENCHMARK_POLICY } from './src/services/deliverabilityBenchmarks';
 
 // Electron supplies these paths in packaged mode. Keeping the resource bundle
@@ -15,6 +17,21 @@ const RESOURCE_ROOT = process.env.EDQ_RESOURCE_PATH || process.cwd();
 const USER_DATA_ROOT = process.env.EDQ_USER_DATA_PATH || RESOURCE_ROOT;
 const ELECTRON_PACKAGED = process.env.EDQ_ELECTRON_PACKAGED === 'true';
 const resourcePath = (...parts: string[]) => path.join(RESOURCE_ROOT, ...parts);
+
+async function extractDocumentText(filename: string, base64Data: string): Promise<string> {
+  const ext = path.extname(filename).toLowerCase();
+  const cleanBase64 = base64Data.replace(/^data:.*;base64,/, '');
+  const buffer = Buffer.from(cleanBase64, 'base64');
+  if (ext === '.docx') return (await mammoth.extractRawText({ buffer })).value.trim();
+  if (ext === '.xlsx' || ext === '.xls') {
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    return workbook.SheetNames.map(name => {
+      const rows = XLSX.utils.sheet_to_csv(workbook.Sheets[name]);
+      return `Sheet: ${name}\n${rows}`;
+    }).join('\n\n').trim();
+  }
+  return '';
+}
 
 type CheckMxStatus = 'critical' | 'warning' | 'info' | 'success';
 
@@ -2209,6 +2226,7 @@ MULTI-PANEL RULE — the agent pinned ${pinnedPanelCount} separate panels (each 
 
 WHAT TO WEIGH (in order of priority):
 0. USER-PINNED PANEL DATA (see block below) — the agent manually selected these modules. If present, they are the primary subject. Analyse them directly and cite their specific values. If more than one panel is pinned, follow the MULTI-PANEL RULE below — do not assume the panels are related.
+0.5. USER-ATTACHED FILES (see block below) — files explicitly uploaded by the user. If present, analyse their contents, answer questions about them, and reference them directly.
 1. The current customer's live ticket details (LIVE ON-SCREEN CONTEXT) — the case in front of you, including account, metrics, RCA, bounce data, and auth results.
 2. The same customer's past tickets (SAME-ACCOUNT history) — spot recurring patterns specific to this account.
 3. Braze-specific best practice from the USER GUIDE EXCERPTS — authoritative for any Braze configuration question.
@@ -2340,8 +2358,31 @@ Return ONLY the answer in Markdown. Do not add a "SUGGESTIONS" section or follow
     const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
 
     try {
-      const { prompt, screen, ticketRef, history: chatHistory, highlightedText, highlightedContext } = req.body;
+      const { prompt, screen, ticketRef, history: chatHistory, highlightedText, highlightedContext, files, googleSearch } = req.body;
       if (!prompt) { send({ error: 'Missing prompt.' }); return res.end(); }
+
+      let filesText = "";
+      if (Array.isArray(files)) {
+        for (const file of files) {
+          if (!file.name || !file.mimeType) continue;
+          const ext = path.extname(file.name).toLowerCase();
+          if (ext === '.xlsx' || ext === '.docx') {
+            if (file.data) {
+              const text = await extractDocumentText(file.name, file.data);
+              filesText += `\n\n=== ATTACHED DOCUMENT: ${file.name} ===\n${text}\n`;
+            }
+          } else if (file.mimeType.startsWith('text/') || ext === '.csv' || ext === '.json' || ext === '.txt' || ext === '.md') {
+            let text = "";
+            if (file.text) {
+              text = file.text;
+            } else if (file.data) {
+              const cleanBase64 = file.data.replace(/^data:.*;base64,/, '');
+              text = Buffer.from(cleanBase64, 'base64').toString('utf8');
+            }
+            filesText += `\n\n=== ATTACHED FILE: ${file.name} ===\n${text}\n`;
+          }
+        }
+      }
 
       const screenText: string = typeof screen === 'string' ? screen : '';
       let ragQuery = /Currently viewing:\s*User Guide/i.test(screenText)
@@ -2475,6 +2516,7 @@ ${trimmedContext}
 
 === HISTORICAL TICKET CONTEXT ===
 ${ticketMemory.block || '(no relevant past tickets found)'}
+${filesText ? `\n=== USER-ATTACHED FILES ===\n${filesText}` : ''}
 
 Return ONLY the answer in Markdown. Do not add a "SUGGESTIONS" section.`;
 
@@ -2487,6 +2529,7 @@ Return ONLY the answer in Markdown. Do not add a "SUGGESTIONS" section.`;
       // Stream from Gemini API
       let fullText = '';
       let thoughtSummary = '';
+      const searchEvidence: Array<{ label: string; path: string }> = [];
       try {
         // Interactions streams displayable thought summaries when the selected
         // Gemini model provides them alongside answer tokens.
@@ -2508,46 +2551,88 @@ Return ONLY the answer in Markdown. Do not add a "SUGGESTIONS" section.`;
             thinkingConfig: { thinkingBudget: 0 },
           },
         }).then(response => String(response.text || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 180)).catch(() => '');
-        let visibleThinkingSent = false;
-        const responseStream = await ai.interactions.create({
-          model: activeGeminiModel,
-          input: interactionInput,
-          system_instruction: systemPrompt,
-          generation_config: {
-            temperature: 0.55,
-            max_output_tokens: 1200,
-            ...(isLiteModel ? {} : {
-              thinking_level: 'low',
-              thinking_summaries: 'auto',
-            }),
-          },
-          stream: true,
-        });
 
-        for await (const event of responseStream) {
-          if (event.event_type !== 'step.delta') continue;
-          const delta = event.delta;
-          if (!isLiteModel && delta.type === 'thought_summary' && delta.content?.type === 'text' && delta.content.text) {
-            thoughtSummary += delta.content.text;
-            send({ thought: delta.content.text });
-            visibleThinkingSent = true;
-          } else if (delta.type === 'text' && delta.text) {
-            if (!isLiteModel && !visibleThinkingSent) {
-              const fallback = await Promise.race([
-                visibleThinkingPromise,
-                new Promise<string>(resolve => setTimeout(() => resolve(''), 350)),
-              ]);
-              if (fallback) {
-                thoughtSummary = fallback;
-                send({ thought: fallback });
-                visibleThinkingSent = true;
-              }
+        const inputParts: any[] = [{ text: interactionInput }];
+        if (Array.isArray(files)) {
+          for (const f of files) {
+            if (f.data && (f.mimeType.startsWith('image/') || f.mimeType === 'application/pdf')) {
+              const cleanBase64 = f.data.replace(/^data:.*;base64,/, '');
+              inputParts.push({
+                inlineData: {
+                  mimeType: f.mimeType,
+                  data: cleanBase64
+                }
+              });
             }
-            fullText += delta.text;
-            send({ token: delta.text });
           }
         }
-        if (!isLiteModel && !visibleThinkingSent) {
+        let visibleThinkingSent = false;
+        if (inputParts.length > 1 || googleSearch) {
+          const responseStream = await ai.models.generateContentStream({
+            model: activeGeminiModel,
+            contents: [{ role: 'user', parts: inputParts }],
+            config: {
+              systemInstruction: systemPrompt,
+              temperature: 0.55,
+              maxOutputTokens: 1200,
+              thinkingConfig: { thinkingBudget: 0 },
+              ...(googleSearch ? { tools: [{ googleSearch: {} }] } : {}),
+            },
+          });
+          for await (const chunk of responseStream) {
+            const metadata = (chunk as any).candidates?.[0]?.groundingMetadata;
+            for (const groundedChunk of metadata?.groundingChunks || []) {
+              const web = groundedChunk?.web;
+              if (web?.uri && !searchEvidence.some(item => item.path === web.uri)) {
+                searchEvidence.push({ label: web.title || 'Google Search result', path: web.uri });
+              }
+            }
+            const deltaText = String(chunk.text || '');
+            if (!deltaText) continue;
+            fullText += deltaText;
+            send({ token: deltaText });
+          }
+        } else {
+          const responseStream = await ai.interactions.create({
+            model: activeGeminiModel,
+            input: interactionInput,
+            system_instruction: systemPrompt,
+            generation_config: {
+              temperature: 0.55,
+              max_output_tokens: 1200,
+              ...(isLiteModel ? {} : {
+                thinking_level: 'low',
+                thinking_summaries: 'auto',
+              }),
+            },
+            stream: true,
+          });
+
+          for await (const event of responseStream) {
+            if (event.event_type !== 'step.delta') continue;
+            const delta = event.delta;
+            if (!isLiteModel && delta.type === 'thought_summary' && delta.content?.type === 'text' && delta.content.text) {
+              thoughtSummary += delta.content.text;
+              send({ thought: delta.content.text });
+              visibleThinkingSent = true;
+            } else if (delta.type === 'text' && delta.text) {
+              if (!isLiteModel && !visibleThinkingSent) {
+                const fallback = await Promise.race([
+                  visibleThinkingPromise,
+                  new Promise<string>(resolve => setTimeout(() => resolve(''), 350)),
+                ]);
+                if (fallback) {
+                  thoughtSummary = fallback;
+                  send({ thought: fallback });
+                  visibleThinkingSent = true;
+                }
+              }
+              fullText += delta.text;
+              send({ token: delta.text });
+            }
+          }
+        }
+        if (!isLiteModel && !visibleThinkingSent && inputParts.length === 1) {
           const fallback = await visibleThinkingPromise;
           if (fallback) {
             thoughtSummary = fallback;
@@ -2591,6 +2676,11 @@ Return ONLY the answer in Markdown. Do not add a "SUGGESTIONS" section.`;
         sameAccountCount: ticketMemory.sameAccountCount,
         usedSourceKeys: attested.usedSourceKeys,
       });
+      if (googleSearch) {
+        for (const source of searchEvidence.slice(0, 8)) {
+          evidence.push({ kind: 'best_practice', label: source.label, detail: 'Google Search grounding', path: source.path });
+        }
+      }
       const thinking = thoughtSummary
         .split(/\n+/)
         .map(note => note

@@ -478,6 +478,66 @@ export default function Layout({
   const [aiPanelIsLoading, setAiPanelIsLoading] = useState(false);
   const [aiPanelChips, setAiPanelChips] = useState<Array<{ label: string; content: string }>>([]);
   const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const dragCounterRef = useRef(0);
+
+  useEffect(() => {
+    const handleDragEnter = (e: DragEvent) => {
+      if (e.dataTransfer && e.dataTransfer.types.includes('Files')) {
+        e.preventDefault();
+        dragCounterRef.current++;
+        setIsDraggingFile(true);
+        if (!isAiPanelOpen) {
+          window.dispatchEvent(new CustomEvent('edq:focus-gemini-pill'));
+        }
+      }
+    };
+
+    const handleDragOver = (e: DragEvent) => {
+      if (e.dataTransfer && e.dataTransfer.types.includes('Files')) {
+        e.preventDefault();
+      }
+    };
+
+    const handleDragLeave = (e: DragEvent) => {
+      if (e.dataTransfer && e.dataTransfer.types.includes('Files')) {
+        e.preventDefault();
+        dragCounterRef.current--;
+        if (dragCounterRef.current <= 0) {
+          dragCounterRef.current = 0;
+          setIsDraggingFile(false);
+        }
+      }
+    };
+
+    const handleDrop = (e: DragEvent) => {
+      if (e.dataTransfer && e.dataTransfer.types.includes('Files')) {
+        e.preventDefault();
+        dragCounterRef.current = 0;
+        setIsDraggingFile(false);
+        const files = Array.from(e.dataTransfer.files);
+        if (files.length > 0) {
+          if (isAiPanelOpen) {
+            window.dispatchEvent(new CustomEvent('gemini-panel-add-files', { detail: { files } }));
+          } else {
+            window.dispatchEvent(new CustomEvent('gemini-pill-add-files', { detail: { files } }));
+          }
+        }
+      }
+    };
+
+    window.addEventListener('dragenter', handleDragEnter);
+    window.addEventListener('dragover', handleDragOver);
+    window.addEventListener('dragleave', handleDragLeave);
+    window.addEventListener('drop', handleDrop);
+
+    return () => {
+      window.removeEventListener('dragenter', handleDragEnter);
+      window.removeEventListener('dragover', handleDragOver);
+      window.removeEventListener('dragleave', handleDragLeave);
+      window.removeEventListener('drop', handleDrop);
+    };
+  }, [isAiPanelOpen]);
   const [aiPanelWidth, setAiPanelWidth] = useState(() => {
     try {
       const stored = Number(localStorage.getItem('edq_ai_panel_width'));
@@ -2132,7 +2192,8 @@ export default function Layout({
         {/* AI PANEL DRAWER — MD3 side sheet. Panel slides in/out; container width closes behind it. */}
         <div
           className={cn(
-            "z-40 h-full min-h-0 overflow-visible",
+            isDraggingFile ? "z-[190]" : "z-40",
+            "h-full min-h-0 overflow-visible",
             "relative shrink-0",
             !isAiPanelDragging && "transition-[width] duration-[280ms]"
           )}
@@ -2169,6 +2230,7 @@ export default function Layout({
             >
               <AiPanel
                 isDark={isDark}
+                isDraggingFile={isDraggingFile}
                 screenContext={screenContext}
                 chatHistory={aiChatHistory}
                 onUpdateHistory={setAiChatHistory}
@@ -2318,9 +2380,28 @@ export default function Layout({
         </div>
       </div>
     </div>
+      <AnimatePresence>
+        {isDraggingFile && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 z-[180] pointer-events-none"
+          >
+            <div className="absolute inset-0 bg-white/25 backdrop-blur-[3px] dark:bg-black/25" />
+            <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-3 text-[#1A73E8]">
+              <span className="material-symbols-outlined text-[72px] font-light leading-none">add</span>
+              <span className="text-xl font-black">Drag &amp; drop here</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Floating Gemini prompt pill — hidden while AiPanel drawer is open */}
       <GeminiPromptPill
         isAiPanelOpen={isAiPanelOpen}
+        isDraggingFile={isDraggingFile}
         onOpenAiPanel={openAiPanel}
         isDark={isDark}
         currentView={currentView}

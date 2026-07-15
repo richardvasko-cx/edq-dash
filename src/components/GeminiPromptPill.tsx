@@ -7,6 +7,8 @@ import { ChatSparkIcon, DocSparkIcon } from './SparkIcons';
 import MarkdownContent from './MarkdownContent';
 import { SourcesPill, SuggestedArticlesPill, type AnswerEvidence, type AppAction, type ChatMessage, type GuideArticle } from './AiPanel';
 import type { ScreenContext } from '../contexts/AiPanel';
+import { prepareGeminiAttachments, type GeminiAttachment } from '../utils/geminiAttachments';
+import GoogleGIcon from './GoogleGIcon';
 import '@material/web/list/list.js';
 import '@material/web/list/list-item.js';
 import '@material/web/icon/icon.js';
@@ -31,6 +33,8 @@ interface ChatEntry {
   displayText?: string;
   edited?: boolean;
   chips?: ContextChip[];
+  files?: Array<{ name: string }>;
+  searchGrounded?: boolean;
   articles?: GuideArticle[];
   actions?: AppAction[];
   thinking?: string[];
@@ -62,6 +66,7 @@ function ensureLocalAppActions(content: string, actions: AppAction[] = []) {
 
 interface GeminiPromptPillProps {
   isAiPanelOpen: boolean;
+  isDraggingFile?: boolean;
   onOpenAiPanel: (seedMessages?: ChatMessage[], pendingQuery?: string, pendingQueryDisplay?: string) => void;
   isDark: boolean;
   currentView: string;
@@ -213,6 +218,7 @@ function serializeScreenContext(ctx: ScreenContext | null): string {
 
 export default function GeminiPromptPill({
   isAiPanelOpen,
+  isDraggingFile = false,
   onOpenAiPanel,
   isDark,
   currentView,
@@ -262,6 +268,46 @@ export default function GeminiPromptPill({
   }, []);
 
   const [chips, setChips] = useState<ContextChip[]>([]);
+  const [files, setFiles] = useState<GeminiAttachment[]>([]);
+  const [searchGrounding, setSearchGrounding] = useState(false);
+  const [isPlusMenuOpen, setIsPlusMenuOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const filePickerOpenRef = useRef(false);
+
+  const addMultipleFiles = async (fileList: File[]) => {
+    const prepared = await prepareGeminiAttachments(fileList);
+    setFiles(prev => [...prev, ...prepared.filter(file => !prev.some(existing => existing.name === file.name))]);
+  };
+
+  const removeFile = (name: string) => {
+    setFiles(prev => prev.filter(f => f.name !== name));
+  };
+
+  const openFilePicker = () => {
+    filePickerOpenRef.current = true;
+    setIsExpanded(true);
+    const handleReturn = () => {
+      window.setTimeout(() => {
+        filePickerOpenRef.current = false;
+        setIsExpanded(true);
+        focusInputWhenReady();
+      }, 0);
+    };
+    window.addEventListener('focus', handleReturn, { once: true });
+    fileInputRef.current?.click();
+  };
+
+  useEffect(() => {
+    const handleAddFiles = (e: Event) => {
+      const customEvent = e as CustomEvent<{ files: File[] }>;
+      if (customEvent.detail && customEvent.detail.files) {
+        addMultipleFiles(customEvent.detail.files);
+      }
+    };
+    window.addEventListener('gemini-pill-add-files', handleAddFiles);
+    return () => window.removeEventListener('gemini-pill-add-files', handleAddFiles);
+  }, []);
+
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [selectedFormat, setSelectedFormat] = useState<Format>('Standard');
   const [moreFormatsOpen, setMoreFormatsOpen] = useState(false);
@@ -417,6 +463,7 @@ export default function GeminiPromptPill({
         actions: m.actions,
         thinking: m.thinking,
         chips: m.chips?.map(c => ({ label: c.label, content: '' })),
+        files: m.files,
       }));
       setChatHistory(entries);
       setChatOpen(true);
@@ -439,6 +486,7 @@ export default function GeminiPromptPill({
         actions: m.actions,
         thinking: m.thinking,
         chips: m.chips?.map(c => ({ label: c.label, content: '' })),
+        files: m.files,
       }));
       setChatHistory(entries);
     }
@@ -458,7 +506,7 @@ export default function GeminiPromptPill({
   const snap = useRef({
     isPillHovered: false, isDropdownHovered: false,
     isFocused: false, inputText: '', chips: [] as ContextChip[],
-    selectorActive: false, isDropdownOpen: false, chatOpen: false, isLoading: false, chatMinimized: false, preHistoryOpen: false, historyView: false, isExpanded: false,
+    selectorActive: false, isDropdownOpen: false, isPlusMenuOpen: false, chatOpen: false, isLoading: false, chatMinimized: false, preHistoryOpen: false, historyView: false, isExpanded: false,
   });
   useEffect(() => {
     snap.current.isFocused = isFocused;
@@ -466,6 +514,7 @@ export default function GeminiPromptPill({
     snap.current.chips = chips;
     snap.current.selectorActive = selectorActive;
     snap.current.isDropdownOpen = isDropdownOpen;
+    snap.current.isPlusMenuOpen = isPlusMenuOpen;
     snap.current.chatOpen = chatOpen;
     snap.current.isLoading = isLoading;
     snap.current.chatMinimized = chatMinimized;
@@ -532,6 +581,7 @@ export default function GeminiPromptPill({
       setIsExpanded(false);
       setChatOpen(false);
       setIsDropdownOpen(false);
+      setIsPlusMenuOpen(false);
     }
     prevAiOpen.current = isAiPanelOpen;
   }, [isAiPanelOpen]);
@@ -581,11 +631,13 @@ export default function GeminiPromptPill({
         setChatMinimized(true);
         setIsExpanded(false);
         setIsDropdownOpen(false);
-      } else if (s.chatOpen || s.isDropdownOpen || s.isExpanded) {
+        setIsPlusMenuOpen(false);
+      } else if (s.chatOpen || s.isDropdownOpen || s.isPlusMenuOpen || s.isExpanded) {
         setChatMinimized(false);
         setChatOpen(false);
         setIsExpanded(false);
         setIsDropdownOpen(false);
+        setIsPlusMenuOpen(false);
         setPreHistoryOpen(false);
         setHistoryOpen(false);
       }
@@ -619,9 +671,9 @@ export default function GeminiPromptPill({
       // outside it. In particular, unmounting suggested prompts must not make
       // their mouse-leave event collapse an in-flight request.
       if (s.isLoading) return;
-      const hasContent = s.inputText.trim().length > 0 || s.chips.length > 0;
+      const hasContent = s.inputText.trim().length > 0 || s.chips.length > 0 || files.length > 0;
       // Never collapse when chat is open — pill stays expanded while conversation is active
-      if (!s.isPillHovered && !s.isDropdownHovered && !s.isFocused && !hasContent && !s.selectorActive && !s.isDropdownOpen && !s.chatOpen && !s.preHistoryOpen && !s.historyView) {
+      if (!filePickerOpenRef.current && !s.isPillHovered && !s.isDropdownHovered && !s.isFocused && !hasContent && !s.selectorActive && !s.isDropdownOpen && !s.chatOpen && !s.preHistoryOpen && !s.historyView) {
         setIsExpanded(false);
         setIsDropdownOpen(false);
       }
@@ -662,7 +714,7 @@ export default function GeminiPromptPill({
     evaluateCollapse();
   };
 
-  const hasContent = inputText.trim().length > 0 || chips.length > 0;
+  const hasContent = inputText.trim().length > 0 || chips.length > 0 || files.length > 0;
   const chipLabelLength = chips.reduce((total, chip) => total + chip.label.length, 0);
   const composerLoad = inputText.length + Math.min(inlineSuggestion.length, 36) + chipLabelLength + Math.max(0, chips.length - 1) * 8;
   const composerWidth = isExpanded
@@ -787,7 +839,7 @@ export default function GeminiPromptPill({
   ) => {
     const text = overrideText ?? inputText.trim();
     const activeChips = overrideChips ?? [...chips];
-    if (!text && activeChips.length === 0) return;
+    if (!text && activeChips.length === 0 && files.length === 0) return;
 
     // Deterministic relatedness. Guide articles are REFERENCE material (apply to
     // the case), never a competing case. "Unrelated" only fires when 2+ non-guide
@@ -802,7 +854,9 @@ export default function GeminiPromptPill({
     const contextualText = text && screenContext?.kind === 'ticket'
       ? `For the current ticket/account shown on screen, answer this exact question: "${text}". Ground the answer in the account's full ticket context, including the case number, issue, root cause, authentication state, deliverability metrics, email performance metrics, bounce/provider signals, and support history where relevant. Treat the active tab as the immediate visual focus, but do not limit the answer to that tab. Do not answer as generic deliverability advice.`
       : text;
-    const apiPrompt = contextualText || (pinsUnrelated
+    const apiPrompt = contextualText || (files.length > 0 && activeChips.length === 0
+      ? `Analyze the attached file${files.length === 1 ? '' : 's'}. Identify the content, summarize the important findings, and call out any risks, anomalies, or useful next actions supported by the file.`
+      : pinsUnrelated
       ? `I've pinned ${activeChips.length} panels from DIFFERENT contexts: ${activeChips.map(c => c.label).join(', ')}. They are NOT part of the same case. Summarize the most detailed/case-specific one, briefly say why you led with it, then ask me what I want to do with the others. Do not blend their metrics or treat them as related.`
       : hasGuideRef
       ? `Using the pinned User Guide article(s) (${guideChips.map(c => c.label).join(', ')}) as best-practice reference, give specific recommendations to resolve the pinned case (${dataChips.map(c => c.label).join(', ')}). Apply the guidance to this case's data.`
@@ -819,7 +873,7 @@ export default function GeminiPromptPill({
           return activeChips.filter(c => c !== lead);
         })()
       : [];
-    const entry: ChatEntry = { type: 'user', text, chips: activeChips, edited, displayText: displayText || undefined };
+    const entry: ChatEntry = { type: 'user', text, chips: activeChips, files: files.map(file => ({ name: file.name })), searchGrounded: searchGrounding, edited, displayText: displayText || undefined };
     const prevHistory = baseHistoryOverride ?? chatHistory;
 
 
@@ -830,6 +884,7 @@ export default function GeminiPromptPill({
       setPreHistoryOpen(false);
       clearPillInput();
       setChips([]);
+      setFiles([]);
       setPillStartersDismissed(true);
       setTimeout(() => {
         const disabledText = '⚠️ **Gemini API is disabled in Settings.** Please enable it to chat.';
@@ -838,6 +893,8 @@ export default function GeminiPromptPill({
       return;
     }
 
+    const snapshotFiles = [...files];
+    const snapshotSearchGrounding = searchGrounding;
     if (baseHistoryOverride) setChatHistory([...baseHistoryOverride, entry]);
     else setChatHistory(prev => [...prev, entry]);
     // Keep the first request inside the glowing pill. Once a completed reply
@@ -848,6 +905,8 @@ export default function GeminiPromptPill({
     setIsLoading(true);
     clearPillInput();
     setChips([]);
+    setFiles([]);
+    setSearchGrounding(false);
     onSelectorToggle?.(false);
     setPillStartersDismissed(true);
     setTimeout(() => scrollToBottom('instant'), 50);
@@ -907,7 +966,9 @@ export default function GeminiPromptPill({
           history: historyForApi,
           highlightedText: selectionContext?.text || highlightedContext?.text,
           highlightedContext: selectionContext?.domContext || highlightedContext?.domContext,
-          dateRange: screenContext?.dateRange ? { from: screenContext.dateRange.from, to: screenContext.dateRange.to } : undefined
+          dateRange: screenContext?.dateRange ? { from: screenContext.dateRange.from, to: screenContext.dateRange.to } : undefined,
+          files: snapshotFiles.length > 0 ? snapshotFiles : undefined,
+          googleSearch: snapshotSearchGrounding,
         }),
         signal: aborter.signal,
       });
@@ -959,7 +1020,7 @@ export default function GeminiPromptPill({
 
     // Auto-save conversation
     const allMsgs = [...prevHistory, entry, { type: 'assistant' as const, text: finalAnswer, articles, actions: finalActions, thinking: thinking.length ? thinking : undefined, evidence: evidence.length ? evidence : undefined }];
-    const apiMsgs = allMsgs.map(e => ({ role: e.type === 'user' ? 'user' : 'assistant', content: e.chips?.length ? [e.text, ...e.chips.map(c => `[Context — ${c.label}]:\n${c.content}`)].filter(Boolean).join('\n\n') : e.text, displayContent: e.displayText || null, chips: e.chips?.length ? e.chips.map(c => ({ label: c.label })) : null, articles: e.articles?.length ? e.articles : null, actions: e.actions?.length ? e.actions : null, evidence: e.evidence?.length ? e.evidence : null }));
+    const apiMsgs = allMsgs.map(e => ({ role: e.type === 'user' ? 'user' : 'assistant', content: e.chips?.length ? [e.text, ...e.chips.map(c => `[Context — ${c.label}]:\n${c.content}`)].filter(Boolean).join('\n\n') : e.text, displayContent: e.displayText || null, chips: e.chips?.length ? e.chips.map(c => ({ label: c.label })) : null, files: e.files?.length ? e.files : null, searchGrounded: e.searchGrounded || null, articles: e.articles?.length ? e.articles : null, actions: e.actions?.length ? e.actions : null, evidence: e.evidence?.length ? e.evidence : null }));
     fetch('/api/conversations', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -994,6 +1055,8 @@ export default function GeminiPromptPill({
       content: entry.text,
       displayContent: entry.displayText || undefined,
       chips: entry.chips?.map(c => ({ label: c.label })),
+      files: entry.files,
+      searchGrounded: entry.searchGrounded,
       articles: entry.articles,
       actions: entry.actions,
       evidence: entry.evidence,
@@ -1037,6 +1100,8 @@ export default function GeminiPromptPill({
         text: m.role === 'user' ? stripChipDump(m.content) : m.content,
         displayText: typeof m.displayContent === 'string' ? m.displayContent : undefined,
         chips: m.chips?.map((c: any) => ({ label: c.label, content: '' })),
+        files: m.files?.length ? m.files : undefined,
+        searchGrounded: Boolean(m.searchGrounded),
         articles: m.articles?.length ? m.articles : undefined,
         actions: m.actions?.length ? m.actions : undefined,
         evidence: m.evidence?.length ? m.evidence : undefined,
@@ -1260,14 +1325,24 @@ export default function GeminiPromptPill({
                                 {entry.edited && (
                                   <span className={cn('text-[9px] font-medium pr-1 pb-0.5', isDark ? 'text-white/35' : 'text-black/35')}>Edited</span>
                                 )}
-                                {entry.chips && entry.chips.length > 0 ? (
+                                {(entry.chips?.length || entry.files?.length || entry.searchGrounded) ? (
                                   <div className="flex flex-col items-end gap-1">
                                     <div className="flex flex-wrap gap-1 justify-end">
-                                      {entry.chips.map(c => (
+                                      {entry.chips?.map(c => (
                                         <span key={c.label} className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#1A73E8]/15 text-[#1A73E8] dark:bg-[#74BBFF]/15 dark:text-[#74BBFF] border border-[#1A73E8]/20 dark:border-[#74BBFF]/20">
                                           #{c.label}
                                         </span>
                                       ))}
+                                      {entry.files?.map(file => (
+                                        <span key={file.name} className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#1A73E8]/15 text-[#1A73E8] dark:bg-[#74BBFF]/15 dark:text-[#74BBFF] border border-[#1A73E8]/20 dark:border-[#74BBFF]/20">
+                                          <span className="material-symbols-outlined text-[12px]">attach_file</span>{file.name}
+                                        </span>
+                                      ))}
+                                      {entry.searchGrounded && (
+                                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#1A73E8]/15 text-[#1A73E8] border border-[#1A73E8]/20">
+                                          <GoogleGIcon className="!h-[13px] !w-[13px] !text-[12px]" /> Search
+                                        </span>
+                                      )}
                                     </div>
                                     {(entry.displayText || entry.text) && (
                                       <div className={cn('px-3 py-2 rounded-2xl rounded-br-sm', t.userBubble)}>
@@ -2033,26 +2108,114 @@ export default function GeminiPromptPill({
                   >
                     <span className="material-symbols-outlined text-[20px]">menu</span>
                   </button>
-                  <button type="button"
-                    onClick={e => { e.stopPropagation(); onSelectorToggle(!selectorActive); }}
-                    title={isInvestigation ? 'Click a section tab to add its ticket data as context' : 'Add context'}
-                    className={cn(
-                      'h-9 flex items-center justify-center overflow-hidden rounded-full transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)]',
-                      selectorActive ? 'w-[82px] gap-1.5 px-3' : 'w-9 px-0',
-                      selectorActive
-                        ? isDark ? 'bg-[#1A73E8]/20 text-[#D2E3FC]' : 'bg-[#E8F0FE] text-[#1A73E8]'
-                        : isDark ? 'text-white/60 hover:bg-white/8' : 'text-[#444746] hover:bg-black/8',
-                    )}
-                  >
+                  {/* Hidden file input */}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    accept="image/*,.pdf,.txt,.csv,.md,.json,.ts,.tsx,.js,.jsx,.html,.css,.docx,.xlsx"
+                    onChange={e => {
+                      if (e.target.files) {
+                        addMultipleFiles(Array.from(e.target.files));
+                        e.target.value = '';
+                      }
+                    }}
+                  />
+
+                  {/* + menu button / Done when selector active */}
+                  <div className="relative">
                     {selectorActive ? (
-                      <>
+                      <button type="button"
+                        onClick={e => { e.stopPropagation(); onSelectorToggle(false); }}
+                        title="Done adding context"
+                        className={cn(
+                          'h-9 flex items-center justify-center overflow-hidden rounded-full transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)]',
+                          'w-[82px] gap-1.5 px-3',
+                          isDark ? 'bg-[#1A73E8]/20 text-[#D2E3FC]' : 'bg-[#E8F0FE] text-[#1A73E8]',
+                        )}
+                      >
                         <span className="material-symbols-outlined shrink-0 text-[17px]">close</span>
                         <span className="shrink-0 text-[12px] font-black">Done</span>
-                      </>
+                      </button>
                     ) : (
-                      <span className="material-symbols-outlined text-[20px]">add</span>
+                      <button type="button"
+                        onClick={e => { e.stopPropagation(); setIsPlusMenuOpen(v => !v); }}
+                        title="Add context or files"
+                        className={cn(
+                          'w-9 h-9 flex items-center justify-center overflow-hidden rounded-full transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)]',
+                          isPlusMenuOpen
+                            ? isDark ? 'bg-white/12 text-white/90' : 'bg-black/8 text-[#1F1F1F]'
+                            : isDark ? 'text-white/60 hover:bg-white/8' : 'text-[#444746] hover:bg-black/8',
+                        )}
+                      >
+                        <span className="material-symbols-outlined text-[20px]">add</span>
+                      </button>
                     )}
-                  </button>
+
+                    {/* Plus menu dropdown */}
+                    <AnimatePresence>
+                    {isPlusMenuOpen && !selectorActive && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 8, scale: 0.96 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 8, scale: 0.96 }}
+                        transition={{ duration: 0.15, ease: [0.175, 0.885, 0.32, 1.15] }}
+                        className={cn(
+                          'absolute bottom-[calc(100%+8px)] left-0 z-[120] w-44 rounded-xl border py-1.5',
+                          isDark
+                            ? 'bg-[#2C2B30] border-white/10 shadow-[0_4px_20px_rgba(0,0,0,0.25)]'
+                            : 'bg-white border-[#E0E4EC] shadow-[0_4px_20px_rgba(0,0,0,0.1)]',
+                        )}
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.stopPropagation();
+                            setIsPlusMenuOpen(false);
+                            onSelectorToggle(true);
+                          }}
+                          className={cn(
+                            'w-full flex items-center gap-2.5 whitespace-nowrap px-4 py-2.5 text-[13px] font-medium transition-colors',
+                            isDark ? 'text-white/90 hover:bg-white/8' : 'text-[#1F1F1F] hover:bg-[#F1F3F4]',
+                          )}
+                        >
+                          <span className="material-symbols-outlined text-[18px] shrink-0">add_box</span>
+                          Add context
+                        </button>
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.stopPropagation();
+                            setIsPlusMenuOpen(false);
+                            openFilePicker();
+                          }}
+                          className={cn(
+                            'w-full flex items-center gap-2.5 whitespace-nowrap px-4 py-2.5 text-[13px] font-medium transition-colors',
+                            isDark ? 'text-white/90 hover:bg-white/8' : 'text-[#1F1F1F] hover:bg-[#F1F3F4]',
+                          )}
+                        >
+                          <span className="material-symbols-outlined text-[18px] shrink-0">attach_file</span>
+                          Add files
+                        </button>
+                        <button
+                          type="button"
+                          onClick={e => { e.stopPropagation(); setSearchGrounding(v => !v); setIsPlusMenuOpen(false); setIsExpanded(true); }}
+                          className={cn(
+                            'w-full flex items-center gap-2.5 whitespace-nowrap px-4 py-2.5 text-[13px] font-medium transition-colors',
+                            searchGrounding
+                              ? isDark ? 'bg-white/10 text-[#D2E3FC]' : 'bg-[#E8F0FE] text-[#185ABC]'
+                              : isDark ? 'text-white/90 hover:bg-white/8' : 'text-[#1F1F1F] hover:bg-[#F1F3F4]',
+                          )}
+                        >
+                          <GoogleGIcon />
+                          Search
+                        </button>
+                      </motion.div>
+                    )}
+                    </AnimatePresence>
+                  </div>
 
                   <button type="button"
                     onClick={e => { e.stopPropagation(); snap.current.isDropdownOpen = !isDropdownOpen; setIsDropdownOpen(v => !v); }}
@@ -2085,6 +2248,22 @@ export default function GeminiPromptPill({
                         </button>
                       </span>
                     ))}
+                    {files.map(file => (
+                      <span key={file.name} className="inline-flex items-center gap-0.5 bg-[#D3E3FD] text-[#041e49] text-[11px] font-semibold px-2 py-0.5 rounded-lg shrink-0 max-w-[140px]">
+                        <span className="material-symbols-outlined text-[11px] shrink-0">attach_file</span>
+                        <span className="truncate">{file.name}</span>
+                        <button type="button" onClick={e => { e.stopPropagation(); removeFile(file.name); }} className="opacity-50 hover:opacity-100 ml-0.5 shrink-0">
+                          <span className="material-symbols-outlined text-[11px]">close</span>
+                        </button>
+                      </span>
+                    ))}
+                    {searchGrounding && (
+                      <button type="button" onClick={e => { e.stopPropagation(); setSearchGrounding(false); }} className={cn('inline-flex items-center gap-1 rounded-lg px-2 py-0.5 text-[11px] font-semibold', isDark ? 'bg-white/10 text-[#D2E3FC]' : 'bg-[#D3E3FD] text-[#041e49]')}>
+                        <GoogleGIcon className="!h-[13px] !w-[13px] !text-[12px]" />
+                        Search
+                        <span className="material-symbols-outlined text-[11px] opacity-50">close</span>
+                      </button>
+                    )}
                     <div className="relative flex-1 min-w-[220px] min-h-6 max-h-[92px] overflow-hidden">
                       {isLoading ? (
                         <span className={cn('flex h-10 items-center pl-5 text-[15px] leading-normal font-semibold', isDark ? 'text-white/75' : 'text-[#4F565E]')}>
@@ -2143,14 +2322,17 @@ export default function GeminiPromptPill({
                       )}
                     </div>
                   </div>
-                  {!isLoading && !inputText && chips.length === 0 && (
+                  {/* Drag-and-drop overlay inside input area */}
+                  {!isLoading && !inputText && chips.length === 0 && files.length === 0 && (
                     <span className={cn(
                       'absolute left-0 text-[15px] leading-6 pointer-events-none whitespace-nowrap select-none',
-                      selectorHint
+                      isDraggingFile
+                        ? isDark ? 'text-[#8AB4F8]/70' : 'text-[#1A73E8]/70'
+                        : selectorHint
                         ? 'text-[#1A73E8]/60 text-[13px] italic'
                         : isDark ? 'text-white/35' : 'text-[#70757a]',
                     )}>
-                      {selectorHint ?? 'Ask Gemini or type to search'}
+                      {isDraggingFile ? 'Drag & drop here' : (selectorHint ?? 'Ask Gemini or type to search')}
                     </span>
                   )}
                 </div>

@@ -7,6 +7,8 @@ import { ChatSparkIcon, DocSparkIcon } from './SparkIcons';
 import MarkdownContent from './MarkdownContent';
 import type { ScreenContext } from '../contexts/AiPanel';
 import type { GeminiSearchItem } from './GeminiPromptPill';
+import { prepareGeminiAttachments, type GeminiAttachment } from '../utils/geminiAttachments';
+import GoogleGIcon from './GoogleGIcon';
 
 export interface GuideArticle {
   path: string;
@@ -43,6 +45,9 @@ export interface ChatMessage {
   edited?: boolean;
   /** Visual context chip labels attached to this message (display only). */
   chips?: Array<{ label: string }>;
+  /** Files attached to this user turn (display metadata only). */
+  files?: Array<{ name: string }>;
+  searchGrounded?: boolean;
   /** Legacy single article (kept for old chat history). */
   article?: GuideArticle | null;
   /** Up to 3 Braze User Guide articles Gemini suggests for this answer. */
@@ -114,6 +119,7 @@ function displayContentIcon(label?: string): string {
 
 interface AiPanelProps {
   isDark: boolean;
+  isDraggingFile?: boolean;
   screenContext: ScreenContext | null;
   chatHistory: ChatMessage[];
   onUpdateHistory: (msgs: ChatMessage[]) => void;
@@ -246,7 +252,7 @@ function serializeScreenContext(ctx: ScreenContext | null): string {
   return lines.join('\n');
 }
 
-export default function AiPanel({ isDark, screenContext, chatHistory, onUpdateHistory, onClose, onOpenArticle, selectorActive, onSelectorToggle, pendingChip, onChipConsumed, onLoadingChange, onChipsChange, pendingQuery, pendingQueryDisplay, onPendingQueryConsumed, searchQuery = '', onSearchQueryChange, searchResults = [], onSelectSearchResult, onRunAction }: AiPanelProps) {
+export default function AiPanel({ isDark, isDraggingFile = false, screenContext, chatHistory, onUpdateHistory, onClose, onOpenArticle, selectorActive, onSelectorToggle, pendingChip, onChipConsumed, onLoadingChange, onChipsChange, pendingQuery, pendingQueryDisplay, onPendingQueryConsumed, searchQuery = '', onSearchQueryChange, searchResults = [], onSelectSearchResult, onRunAction }: AiPanelProps) {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
@@ -256,6 +262,31 @@ export default function AiPanel({ isDark, screenContext, chatHistory, onUpdateHi
   const [openThinkingMessage, setOpenThinkingMessage] = useState<number | null>(null);
   const [inlineSuggestion, setInlineSuggestion] = useState('');
   const [panelChips, setPanelChips] = useState<PanelChip[]>([]);
+  const [panelFiles, setPanelFiles] = useState<GeminiAttachment[]>([]);
+  const [searchGrounding, setSearchGrounding] = useState(false);
+  const [isPlusMenuOpen, setIsPlusMenuOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const addMultipleFiles = async (fileList: File[]) => {
+    const prepared = await prepareGeminiAttachments(fileList);
+    setPanelFiles(prev => [...prev, ...prepared.filter(file => !prev.some(existing => existing.name === file.name))]);
+  };
+
+  const removePanelFile = (name: string) => {
+    setPanelFiles(prev => prev.filter(f => f.name !== name));
+  };
+
+  useEffect(() => {
+    const handleAddFiles = (e: Event) => {
+      const customEvent = e as CustomEvent<{ files: File[] }>;
+      if (customEvent.detail && customEvent.detail.files) {
+        addMultipleFiles(customEvent.detail.files);
+      }
+    };
+    window.addEventListener('gemini-panel-add-files', handleAddFiles);
+    return () => window.removeEventListener('gemini-panel-add-files', handleAddFiles);
+  }, []);
+
   const [panelFormat, setPanelFormat] = useState<PanelFormat>('Standard');
   const [moreFormatsOpen, setMoreFormatsOpen] = useState(false);
   const [formatOpen, setFormatOpen] = useState(false);
@@ -634,7 +665,7 @@ export default function AiPanel({ isDark, screenContext, chatHistory, onUpdateHi
   const sendMessage = async (query?: string, overrideChips?: PanelChip[], baseHistoryOverride?: ChatMessage[], edited?: boolean, displayContent?: string) => {
     const msg = (query || input).trim();
     const activeChips = overrideChips ?? panelChips;
-    if ((!msg && activeChips.length === 0) || isLoading) return;
+    if ((!msg && activeChips.length === 0 && panelFiles.length === 0) || isLoading) return;
     const baseHistory = baseHistoryOverride ?? chatHistory;
     clearInput();
     onSelectorToggle?.(false);
@@ -651,7 +682,9 @@ export default function AiPanel({ isDark, screenContext, chatHistory, onUpdateHi
     const contextualMsg = msg && screenContext?.kind === 'ticket'
       ? `For the current ticket/account shown on screen, answer this exact question: "${msg}". Ground the answer in the account's full ticket context, including the case number, issue, root cause, authentication state, deliverability metrics, email performance metrics, bounce/provider signals, and support history where relevant. Treat the active tab as the immediate visual focus, but do not limit the answer to that tab. Do not answer as generic deliverability advice.`
       : msg;
-    const apiText = contextualMsg || (pinsUnrelated
+    const apiText = contextualMsg || (panelFiles.length > 0 && activeChips.length === 0
+      ? `Analyze the attached file${panelFiles.length === 1 ? '' : 's'}. Identify the content, summarize the important findings, and call out any risks, anomalies, or useful next actions supported by the file.`
+      : pinsUnrelated
       ? `I've pinned ${activeChips.length} panels from DIFFERENT contexts: ${activeChips.map(c => c.label).join(', ')}. They are NOT part of the same case. Summarize the most detailed/case-specific one, briefly say why you led with it, then ask me what I want to do with the others. Do not blend their metrics or treat them as related.`
       : hasGuideRef
       ? `Using the pinned User Guide article(s) (${guideChips.map(c => c.label).join(', ')}) as best-practice reference, give specific recommendations to resolve the pinned case (${dataChips.map(c => c.label).join(', ')}). Apply the guidance to this case's data.`
@@ -670,7 +703,7 @@ export default function AiPanel({ isDark, screenContext, chatHistory, onUpdateHi
       : [];
     const formatPrefix = PANEL_FORMAT_INSTRUCTIONS[panelFormat];
     const fullMsg = formatPrefix + apiText;
-    const userMsg: ChatMessage = { role: 'user', content: msg, timestamp: Date.now(), edited, chips: activeChips.length > 0 ? activeChips.map(c => ({ label: c.label })) : undefined, displayContent: displayContent || undefined };
+    const userMsg: ChatMessage = { role: 'user', content: msg, timestamp: Date.now(), edited, chips: activeChips.length > 0 ? activeChips.map(c => ({ label: c.label })) : undefined, files: panelFiles.map(file => ({ name: file.name })), searchGrounded: searchGrounding, displayContent: displayContent || undefined };
     const next = [...baseHistory, userMsg];
     onUpdateHistory(next);
     setTimeout(() => scrollToBottom(), 50);
@@ -685,6 +718,10 @@ export default function AiPanel({ isDark, screenContext, chatHistory, onUpdateHi
 
     loadingStartRef.current = Date.now(); setIsLoading(true); onLoadingChange?.(true);
     setStreamingContent('');
+    const snapshotFiles = [...panelFiles];
+    const snapshotSearchGrounding = searchGrounding;
+    setPanelFiles([]);
+    setSearchGrounding(false);
     const relatednessNote = activeChips.length > 1
       ? (pinsUnrelated
           ? '(RELATEDNESS: these panels are from DIFFERENT contexts — treat as UNRELATED; never cross-attribute their values. Lead with the most case-specific panel and say why.)\n'
@@ -726,7 +763,9 @@ export default function AiPanel({ isDark, screenContext, chatHistory, onUpdateHi
           screen,
           ticketRef,
           history: historyForApi,
-          dateRange: screenContext?.dateRange ? { from: screenContext.dateRange.from, to: screenContext.dateRange.to } : undefined
+          dateRange: screenContext?.dateRange ? { from: screenContext.dateRange.from, to: screenContext.dateRange.to } : undefined,
+          files: snapshotFiles.length > 0 ? snapshotFiles : undefined,
+          googleSearch: snapshotSearchGrounding,
         }),
         signal: aborter.signal,
       });
@@ -775,7 +814,7 @@ export default function AiPanel({ isDark, screenContext, chatHistory, onUpdateHi
     setIsLoading(false); onLoadingChange?.(false);
 
     // Auto-save conversation
-    const apiMsgs = finalHistory.map((m: ChatMessage) => ({ role: m.role, content: m.content, displayContent: m.displayContent || null, chips: m.chips?.length ? m.chips : null, thinking: m.thinking?.length ? m.thinking : null, evidence: m.evidence?.length ? m.evidence : null }));
+    const apiMsgs = finalHistory.map((m: ChatMessage) => ({ role: m.role, content: m.content, displayContent: m.displayContent || null, chips: m.chips?.length ? m.chips : null, files: m.files?.length ? m.files : null, searchGrounded: m.searchGrounded || null, thinking: m.thinking?.length ? m.thinking : null, evidence: m.evidence?.length ? m.evidence : null }));
     fetch('/api/conversations', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -803,6 +842,8 @@ export default function AiPanel({ isDark, screenContext, chatHistory, onUpdateHi
         displayContent: typeof m.displayContent === 'string' ? m.displayContent : undefined,
         timestamp: Date.now(),
         chips: m.chips?.length ? m.chips : undefined,
+        files: m.files?.length ? m.files : undefined,
+        searchGrounded: Boolean(m.searchGrounded),
         articles: m.articles?.length ? m.articles : undefined,
         actions: m.actions?.length ? m.actions : undefined,
         evidence: m.evidence?.length ? m.evidence : undefined,
@@ -998,14 +1039,24 @@ export default function AiPanel({ isDark, screenContext, chatHistory, onUpdateHi
                         {msg.edited && (
                           <span className={cn('text-[9px] font-medium pr-1 pb-0.5', isDark ? 'text-white/35' : 'text-black/35')}>Edited</span>
                         )}
-                        {msg.chips && msg.chips.length > 0 ? (
+                        {(msg.chips?.length || msg.files?.length || msg.searchGrounded) ? (
                           <div className="flex flex-col items-end gap-1">
                             <div className="flex flex-wrap gap-1 justify-end">
-                              {msg.chips.map(c => (
+                              {msg.chips?.map(c => (
                                 <span key={c.label} className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#1A73E8]/15 text-[#1A73E8] dark:bg-[#74BBFF]/15 dark:text-[#74BBFF] border border-[#1A73E8]/20 dark:border-[#74BBFF]/20">
                                   #{c.label}
                                 </span>
                               ))}
+                              {msg.files?.map(file => (
+                                <span key={file.name} className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#1A73E8]/15 text-[#1A73E8] dark:bg-[#74BBFF]/15 dark:text-[#74BBFF] border border-[#1A73E8]/20 dark:border-[#74BBFF]/20">
+                                  <span className="material-symbols-outlined text-[12px]">attach_file</span>{file.name}
+                                </span>
+                              ))}
+                              {msg.searchGrounded && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#1A73E8]/15 text-[#1A73E8] border border-[#1A73E8]/20">
+                                  <GoogleGIcon className="!h-[13px] !w-[13px] !text-[12px]" /> Search
+                                </span>
+                              )}
                             </div>
                             {(msg.displayContent || msg.content) && (
                               <div className={cn('px-3 py-2 rounded-2xl rounded-br-sm', t.userBubble)}>
@@ -1491,27 +1542,111 @@ export default function AiPanel({ isDark, screenContext, chatHistory, onUpdateHi
                 />
               )}
               <div className={cn('relative z-10 flex gap-1 rounded-[28px] px-2.5 py-1.5 border min-w-0', inputExpanded ? 'items-end' : 'items-center', t.inputWrap)}>
-              {/* + context button — matches pill exactly */}
-              <button type="button"
-                onClick={() => onSelectorToggle?.(!selectorActive)}
-                title="Add context from a section tab"
-                className={cn(
-                  'h-9 flex items-center justify-center overflow-hidden rounded-full transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)] shrink-0',
-                  selectorActive ? 'w-[82px] gap-1.5 px-3' : 'w-9 px-0',
-                  selectorActive
-                    ? isDark ? 'bg-[#1A73E8]/20 text-[#D2E3FC]' : 'bg-[#E8F0FE] text-[#1A73E8]'
-                    : isDark ? 'text-white/60 hover:bg-white/8' : 'text-[#444746] hover:bg-black/8',
-                )}
-              >
+              {/* Hidden file input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                accept="image/*,.pdf,.txt,.csv,.md,.json,.ts,.tsx,.js,.jsx,.html,.css,.docx,.xlsx"
+                onChange={e => {
+                  if (e.target.files) {
+                    addMultipleFiles(Array.from(e.target.files));
+                    e.target.value = '';
+                  }
+                }}
+              />
+
+              {/* + menu button / Done when selector active */}
+              <div className="relative shrink-0">
                 {selectorActive ? (
-                  <>
+                  <button type="button"
+                    onClick={() => onSelectorToggle?.(false)}
+                    title="Done adding context"
+                    className={cn(
+                      'h-9 flex items-center justify-center overflow-hidden rounded-full transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)] shrink-0',
+                      'w-[82px] gap-1.5 px-3',
+                      isDark ? 'bg-[#1A73E8]/20 text-[#D2E3FC]' : 'bg-[#E8F0FE] text-[#1A73E8]',
+                    )}
+                  >
                     <span className="material-symbols-outlined shrink-0 text-[17px]">close</span>
                     <span className="shrink-0 text-[12px] font-black">Done</span>
-                  </>
+                  </button>
                 ) : (
-                  <span className="material-symbols-outlined text-[20px]">add</span>
+                  <button type="button"
+                    onClick={() => setIsPlusMenuOpen(v => !v)}
+                    title="Add context or files"
+                    className={cn(
+                      'w-9 h-9 flex items-center justify-center overflow-hidden rounded-full transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)] shrink-0',
+                      isPlusMenuOpen
+                        ? isDark ? 'bg-white/12 text-white/90' : 'bg-black/8 text-[#1F1F1F]'
+                        : isDark ? 'text-white/60 hover:bg-white/8' : 'text-[#444746] hover:bg-black/8',
+                    )}
+                  >
+                    <span className="material-symbols-outlined text-[20px]">add</span>
+                  </button>
                 )}
-              </button>
+
+                {/* Plus menu dropdown */}
+                <AnimatePresence>
+                {isPlusMenuOpen && !selectorActive && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 6, scale: 0.96 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 6, scale: 0.96 }}
+                    transition={{ duration: 0.14, ease: [0.175, 0.885, 0.32, 1.15] }}
+                    className={cn(
+                      'absolute bottom-full left-0 mb-2 z-50 w-44 rounded-xl border py-1.5',
+                      isDark
+                        ? 'bg-[#2C2B30] border-white/10 shadow-[0_4px_20px_rgba(0,0,0,0.25)]'
+                        : 'bg-white border-[#E0E4EC] shadow-[0_4px_20px_rgba(0,0,0,0.1)]',
+                    )}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsPlusMenuOpen(false);
+                        onSelectorToggle?.(true);
+                      }}
+                      className={cn(
+                        'w-full flex items-center gap-2.5 whitespace-nowrap px-4 py-2.5 text-[13px] font-medium transition-colors',
+                        isDark ? 'text-white/90 hover:bg-white/8' : 'text-[#1F1F1F] hover:bg-[#F1F3F4]',
+                      )}
+                    >
+                      <span className="material-symbols-outlined text-[18px] shrink-0">add_box</span>
+                      Add context
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsPlusMenuOpen(false);
+                        fileInputRef.current?.click();
+                      }}
+                      className={cn(
+                        'w-full flex items-center gap-2.5 whitespace-nowrap px-4 py-2.5 text-[13px] font-medium transition-colors',
+                        isDark ? 'text-white/90 hover:bg-white/8' : 'text-[#1F1F1F] hover:bg-[#F1F3F4]',
+                      )}
+                    >
+                      <span className="material-symbols-outlined text-[18px] shrink-0">attach_file</span>
+                      Add files
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setSearchGrounding(v => !v); setIsPlusMenuOpen(false); }}
+                      className={cn(
+                        'w-full flex items-center gap-2.5 whitespace-nowrap px-4 py-2.5 text-[13px] font-medium transition-colors',
+                        searchGrounding
+                          ? isDark ? 'bg-white/10 text-[#D2E3FC]' : 'bg-[#E8F0FE] text-[#185ABC]'
+                          : isDark ? 'text-white/90 hover:bg-white/8' : 'text-[#1F1F1F] hover:bg-[#F1F3F4]',
+                      )}
+                    >
+                      <GoogleGIcon />
+                      Search
+                    </button>
+                  </motion.div>
+                )}
+                </AnimatePresence>
+              </div>
 
               {/* Format button — matches pill chip style */}
               <button type="button"
@@ -1530,7 +1665,29 @@ export default function AiPanel({ isDark, screenContext, chatHistory, onUpdateHi
                 {panelFormat !== 'Standard' && <span className="text-xs font-bold leading-none">{panelFormat}</span>}
               </button>
 
-              <div className="relative flex-1 min-w-0 flex items-center">
+              <div className="relative flex-1 min-w-0 flex flex-col">
+                {/* File chips in the panel input */}
+                {(panelFiles.length > 0 || searchGrounding) && (
+                  <div className="flex flex-wrap gap-1 mb-1">
+                    {searchGrounding && (
+                      <button type="button" onClick={() => setSearchGrounding(false)} className={cn('inline-flex items-center gap-1 rounded-lg px-2 py-0.5 text-[11px] font-semibold', isDark ? 'bg-white/10 text-[#D2E3FC]' : 'bg-[#D3E3FD] text-[#041e49]')}>
+                        <GoogleGIcon className="!h-[13px] !w-[13px] !text-[12px]" /> Search
+                        <span className="material-symbols-outlined text-[11px] opacity-50">close</span>
+                      </button>
+                    )}
+                    {panelFiles.map(file => (
+                      <span key={file.name} className="inline-flex items-center gap-0.5 bg-[#D3E3FD] text-[#041e49] text-[11px] font-semibold px-2 py-0.5 rounded-lg shrink-0 max-w-[160px]">
+                        <span className="material-symbols-outlined text-[11px] shrink-0">attach_file</span>
+                        <span className="truncate">{file.name}</span>
+                        <button type="button" onClick={() => removePanelFile(file.name)} className="opacity-50 hover:opacity-100 ml-0.5 shrink-0">
+                          <span className="material-symbols-outlined text-[11px]">close</span>
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="relative flex items-center min-w-0">
+                  {/* Drag-and-drop overlay inside panel input */}
                 {isLoading ? (
                   <span className={cn('flex h-10 items-center pl-5 text-[15px] leading-normal font-semibold', isDark ? 'text-white/75' : 'text-[#4F565E]')}>
                     <span className="thinking-shimmer">Thinking...</span>
@@ -1565,7 +1722,7 @@ export default function AiPanel({ isDark, screenContext, chatHistory, onUpdateHi
                   rows={1}
                   autoComplete="off"
                   className={cn('relative z-10 block h-5 min-h-5 max-h-[92px] w-full min-w-0 resize-none overflow-hidden bg-transparent outline-none text-[13px] leading-5 caret-[#1A73E8]', t.inputText)}
-                  placeholder="Ask Gemini or type to search"
+                  placeholder={isDraggingFile ? 'Drag & drop here' : 'Ask Gemini or type to search'}
                   value={input}
                   onChange={e => updateInput(e.target.value)}
                   onKeyDown={e => {
@@ -1596,7 +1753,7 @@ export default function AiPanel({ isDark, screenContext, chatHistory, onUpdateHi
                         const nextCursor = before.length + spacer.length + inlineSuggestion.length;
                         inputRef.current?.setSelectionRange(nextCursor, nextCursor);
                       });
-                    } else if (e.key === 'Enter' && !isLoading && (input.trim() || panelChips.length > 0)) {
+                    } else if (e.key === 'Enter' && !isLoading && (input.trim() || panelChips.length > 0 || panelFiles.length > 0)) {
                       e.preventDefault();
                       sendMessage();
                     } else if (e.key === 'Escape' && inlineSuggestion) {
@@ -1607,7 +1764,8 @@ export default function AiPanel({ isDark, screenContext, chatHistory, onUpdateHi
                 />
                   </>
                 )}
-              </div>
+                </div>{/* end inner flex items-center */}
+              </div>{/* end outer flex-col */}
               {isLoading ? (
                 <button type="button"
                   onClick={() => {
@@ -1626,10 +1784,10 @@ export default function AiPanel({ isDark, screenContext, chatHistory, onUpdateHi
               ) : (
                 <button type="button"
                   onClick={() => sendMessage()}
-                  disabled={!input.trim() && panelChips.length === 0}
+                  disabled={!input.trim() && panelChips.length === 0 && panelFiles.length === 0}
                   className={cn(
                     'w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-all',
-                    (input.trim() || panelChips.length > 0)
+                    (input.trim() || panelChips.length > 0 || panelFiles.length > 0)
                       ? 'bg-[#0b57d0] text-white hover:bg-[#0842a0] hover:scale-105'
                       : cn(isDark ? 'bg-white/8 text-white/20' : 'bg-[#F1F3F4] text-[#BFBFBF]', 'cursor-not-allowed')
                   )}

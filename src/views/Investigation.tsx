@@ -1123,7 +1123,7 @@ export default function Investigation({
                             <div className="flex h-full min-h-[124px] flex-col justify-between">
                               <div className="flex items-start justify-between gap-5">
                                 <div className="min-w-0">
-                                  <div className="text-[42px] leading-none font-[500] tracking-[0.02em] text-[#5F6368]">{card.label}</div>
+                                  <div className="whitespace-nowrap text-[clamp(34px,3.1vw,42px)] leading-none font-[500] tracking-[0.01em] text-[#5F6368]">{card.label}</div>
                                   <div className={cn(
                                     "mt-3 inline-flex rounded-full border px-3 py-1 text-[11px] font-black",
                                     healthy ? "border-[#CEEAD6] bg-[#E6F4EA] text-[#137333]" :
@@ -1133,11 +1133,11 @@ export default function Investigation({
                                     {statusText}
                                   </div>
                                 </div>
-                                <div className="flex h-[104px] w-[104px] shrink-0 items-center justify-center pt-2">
+                                <div className="flex h-[104px] w-[104px] shrink-0 items-center justify-center pt-2" aria-label={`${card.label} ${statusText}`}>
                                   {healthy ? (
-                                    <span className="material-symbols-outlined scale-[1.18] text-[104px] leading-none text-[#4285F4]" style={{ fontVariationSettings: "'FILL' 1, 'wght' 700, 'GRAD' 200, 'opsz' 48" }}>verified_user</span>
+                                    <span className="material-symbols-outlined text-[88px] leading-none text-[#4285F4]" style={{ fontVariationSettings: "'FILL' 1, 'wght' 700, 'GRAD' 200, 'opsz' 48" }}>verified_user</span>
                                   ) : (
-                                    <span className="text-[84px] leading-none" aria-hidden="true">⚠️</span>
+                                    <span className={cn("material-symbols-outlined text-[88px] leading-none", error ? "text-[#F9AB00]" : "text-[#F9AB00]")} style={{ fontVariationSettings: "'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 48" }} aria-hidden="true">warning</span>
                                   )}
                                 </div>
                               </div>
