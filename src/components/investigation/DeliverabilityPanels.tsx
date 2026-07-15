@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, isValidElement, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   Bar,
@@ -1642,6 +1642,14 @@ function StaticCustomizePreview({
   );
 }
 
+function previewCell(value: unknown): string {
+  if (value == null) return '';
+  if (typeof value === 'string' || typeof value === 'number') return String(value);
+  if (Array.isArray(value)) return value.map(previewCell).join(' ');
+  if (isValidElement(value)) return previewCell((value.props as { children?: unknown }).children);
+  return '';
+}
+
 function LazyDeliverabilityPanel({
   visible,
   resetKey,
@@ -2212,7 +2220,7 @@ export function DeliverabilityDiagnosticsDashboard({
   const deferralPreviewBars = deferralTrendRowsScoped.map(row => row.deferred || row.delay || row.accepted);
   const bouncePreviewBars = bounceTrendRowsScoped.map(row => row.hardbounce || row.bounce || row.delivered);
   const deliveriesPreviewColumns = deliveryMetricTable.columns.slice(0, 4);
-  const deliveriesPreviewRows = deliveryMetricTable.rows.slice(0, 5).map(row => deliveriesPreviewColumns.map((_column, index) => String(row[index] ?? '')));
+  const deliveriesPreviewRows = deliveryMetricTable.rows.slice(0, 5).map(row => deliveriesPreviewColumns.map((_column, index) => previewCell(row[index])));
   const ipPreviewColumns = ['IP pool', 'IP address', 'Deliveries'];
   const ipPreviewRows = ipRowsScoped.slice(0, 5).map(row => [row.pool, row.ip, formatInt(scaleCount(row.deliveries, ipRowsScopedRatio))]);
   const ispPreviewColumns = ['ISP', 'Sent', 'Delivered', '% delivered', 'Hardbounces', 'Reputation / blocks', 'Others'];
@@ -2569,6 +2577,7 @@ export function DeliverabilityDiagnosticsDashboard({
           </Panel>
         </LazyDeliverabilityPanel>
 
+        <div className="xl:col-span-2">
         <LazyDeliverabilityPanel visible={isPanelVisibleInActiveView('bounceTrend')} resetKey={`${ticket.case_number}:bounceTrend`}>
           <Panel
           title="Deliveries vs. Hardbounces over time"
@@ -2581,6 +2590,7 @@ export function DeliverabilityDiagnosticsDashboard({
             <TrendMetricChart rows={bounceTrendRowsScoped} metricKeys={panelMetricSelections.bounceTrend} masterMetrics={providerMasterMetrics} height={280} />
           </Panel>
         </LazyDeliverabilityPanel>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">

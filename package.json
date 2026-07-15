@@ -2,15 +2,89 @@
   "name": "edq-dashboard",
   "private": true,
   "version": "0.0.0",
+  "description": "Preview desktop app for the EDQ Dashboard.",
+  "author": "Braze Email Deliverability Team",
   "type": "module",
+  "main": "dist-electron/main.cjs",
   "scripts": {
     "dev": "tsx watch server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "dev:electron": "npm run build:electron && EDQ_ELECTRON_DEV=1 electron dist-electron/main.cjs",
+    "build:web": "vite build",
+    "build:server": "esbuild server.ts --bundle --platform=node --format=cjs --define:process.env.NODE_ENV='\"production\"' --outfile=dist/server.cjs",
+    "build:electron": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --format=cjs --outdir=dist-electron --out-extension:.js=.cjs --external:electron && node electron/create-preview-key.mjs",
+    "build": "npm run build:web && npm run build:server && npm run build:electron",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
-    "clean": "rm -rf dist server.js",
+    "clean": "rm -rf dist dist-electron release server.js",
     "lint": "tsc --noEmit",
-    "start-all": "./start-all.sh"
+    "start-all": "./start-all.sh",
+    "pack:mac": "CSC_IDENTITY_AUTO_DISCOVERY=false npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir --mac --arm64",
+    "dist:mac:arm64": "CSC_IDENTITY_AUTO_DISCOVERY=false npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg --arm64"
+  },
+  "build": {
+    "appId": "com.braze.edqdashboard.preview",
+    "productName": "EDQ Dashboard Preview",
+    "directories": {
+      "output": "release",
+      "buildResources": "electron/assets"
+    },
+    "asar": true,
+    "asarUnpack": [
+      "dist/**",
+      "public/**",
+      "braze_user_guide_md/**",
+      "braze_user_guide_state.json",
+      "braze_user_guide_manifest.csv"
+    ],
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "public/**",
+      "braze_user_guide_md/**",
+      "braze_user_guide_state.json",
+      "braze_user_guide_manifest.csv",
+      "package.json",
+      "!**/*.map",
+      "!**/.DS_Store",
+      "!src/**",
+      "!conversations/**",
+      "!*.env",
+      "!node_modules/**"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.business",
+      "icon": "electron/assets/icon.icns",
+      "hardenedRuntime": false
+    },
+    "dmg": {
+      "title": "EDQ Dashboard Preview",
+      "background": "electron/assets/dmg-background.png",
+      "window": {
+        "width": 1200,
+        "height": 675
+      },
+      "contents": [
+        {
+          "x": 360,
+          "y": 345,
+          "type": "file"
+        },
+        {
+          "x": 840,
+          "y": 345,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -37,6 +111,8 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "autoprefixer": "^10.4.21",
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",

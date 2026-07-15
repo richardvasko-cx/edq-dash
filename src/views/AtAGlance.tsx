@@ -316,28 +316,17 @@ export default function AtAGlance({ onOpenTicket }: AtAGlanceProps) {
         + (cases.some(item => isHighImpact(item, reference)) ? 20 : 0)
         + (renewal !== null && renewal <= 90 ? 18 : 0)
         + Math.min(history.length * 3, 15));
-      const paidServiceReasonParts = [
-        cases.some(item => isHighImpact(item, reference))
-          ? `${formatCompactUsd(Math.max(...cases.map(item => item.current_carr_usd || 0)))} of active value is exposed`
-          : null,
-        renewal !== null && renewal <= 90
-          ? `renewal is due in ${renewal} days, so stabilisation work has near-term commercial value`
-          : null,
-        history.length >= 3
-          ? `${history.length} total support cases point to a repeat operating pattern, not a one-off incident`
-          : history.length === 2
-            ? 'repeat case history suggests the issue is structural enough to justify a packaged review'
-            : null,
-        cases.length > 1
-          ? `${cases.length} open cases indicate broader operational drag across the account`
-          : null,
-        lead.case_priority === 'Critical' || lead.case_priority === 'High'
-          ? `${lead.case_priority.toLowerCase()}-priority delivery risk means paid diagnostics could shorten time to containment`
-          : null,
-      ].filter(Boolean) as string[];
-      const paidServiceReason = paidServiceReasonParts.length
-        ? `${paidServiceReasonParts.slice(0, 2).join('. ')}.`
-        : 'Active delivery risk and account context make a scoped paid review commercially credible.';
+      const carr = Math.max(...cases.map(item => item.current_carr_usd || 0));
+      const oldestAge = Math.max(...cases.map(item => daysBetween(item.case_created_at, reference)));
+      const paidServiceReason = renewal !== null && renewal <= 90
+        ? `${lead.case_priority} delivery risk on ${formatCompactUsd(carr)} CARR has only ${renewal}d to renewal; resolve “${lead.case_subject}” before the commercial window closes.`
+        : oldestAge >= 300
+          ? `This ${lead.case_priority.toLowerCase()} case has remained open ${oldestAge}d on ${formatCompactUsd(carr)} CARR; prolonged exposure makes “${lead.case_subject}” an account-stability risk.`
+          : history.length >= 2
+            ? `${history.length} account cases and ${cases.length} open issue${cases.length === 1 ? '' : 's'} show a recurring pattern; ${formatCompactUsd(carr)} CARR raises the cost of leaving “${lead.case_subject}” unresolved.`
+            : carr >= 1_500_000
+              ? `${formatCompactUsd(carr)} CARR is attached to a ${lead.case_priority.toLowerCase()} issue; “${lead.case_subject}” warrants early containment even though renewal is ${renewal ?? 'not yet scheduled'}d away.`
+              : `${lead.case_priority} priority, ${oldestAge}d open age and ${formatCompactUsd(carr)} CARR make “${lead.case_subject}” a material operational risk to contain.`;
       return {
         account,
         caseNumber: lead.case_number,
@@ -678,7 +667,7 @@ export default function AtAGlance({ onOpenTicket }: AtAGlanceProps) {
                   <div className="mb-3 flex items-center justify-between"><h3 className="text-[14px] font-black text-[#202124]">Top exposed accounts</h3><span className="text-[11px] font-semibold text-[#68717D]">Select an account to view its ticket</span></div>
                   <div className="min-w-[920px]">
                     <div className="grid grid-cols-[minmax(150px,1.2fr)_82px_78px_76px_62px_70px_94px_minmax(190px,1fr)] gap-3 border-b border-dotted border-[#DDE1E7] pb-2 text-[10px] font-semibold tracking-wide text-[#53677D]">
-                      <span>Account</span><span>Priority</span><span>Value</span><span>Renewal</span><span>Open</span><span>History</span><span>Paid services</span><span>Why</span>
+                      <span>Account</span><span>Priority</span><span>Value</span><span>Renewal</span><span>Open</span><span>History</span><span>Paid services</span><span>Why this account</span>
                     </div>
                     <div className="divide-y divide-dotted divide-[#DDE1E7]">
                       {attentionAccounts.slice(0, 5).map(account => (

@@ -100,11 +100,16 @@ export function PanelRemoveButton({ onClick }: { onClick: () => void }) {
 
 function FallbackPreview() {
   return (
-    <div className="flex h-full flex-col justify-center gap-3 rounded-[8px] bg-transparent px-4">
-      <span className="h-3 w-20 rounded-full bg-[#1a73e8]/70" />
-      <div className="space-y-3">
-        <span className="block h-3 w-full rounded-full bg-[#1a73e8]/45" />
-        <span className="block h-3 w-3/4 rounded-full bg-[#1a73e8]/35" />
+    <div className="flex h-full flex-col gap-3 p-3">
+      <div className="flex items-end justify-between gap-2">
+        <span className="h-2.5 w-20 rounded-full bg-[#1A73E8]" />
+        <span className="h-2 w-10 rounded-full bg-[#E8F0FE]" />
+      </div>
+      <div className="flex flex-1 items-end gap-1.5 border-b border-[#D7E3F8] pb-1">
+        {[44, 62, 35, 74, 54, 80, 47, 68, 56, 86].map((height, index) => <span key={index} className={cn('flex-1 rounded-t-[3px]', index % 3 === 0 ? 'bg-[#FFA524]' : index % 3 === 1 ? 'bg-[#7B1FEA]' : 'bg-[#8AB4F8]')} style={{ height: `${height}%` }} />)}
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        {['96%', '24%', '3.1%'].map((value, index) => <div key={value} className="rounded-md bg-[#EEF4FF] px-1.5 py-1 text-center"><span className="block text-[9px] font-black text-[#1A73E8]">{value}</span><span className="block text-[6px] font-bold text-[#5F6368]">{['Delivery', 'Opens', 'CTR'][index]}</span></div>)}
       </div>
     </div>
   );

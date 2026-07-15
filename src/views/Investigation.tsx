@@ -1133,11 +1133,11 @@ export default function Investigation({
                                     {statusText}
                                   </div>
                                 </div>
-                                <div className="shrink-0 pt-6">
+                                <div className="flex h-[104px] w-[104px] shrink-0 items-center justify-center pt-2">
                                   {healthy ? (
-                                    <span className="material-symbols-outlined text-[82px] leading-none text-[#4285F4]" style={{ fontVariationSettings: "'FILL' 1" }}>verified_user</span>
+                                    <span className="material-symbols-outlined scale-[1.18] text-[104px] leading-none text-[#4285F4]" style={{ fontVariationSettings: "'FILL' 1, 'wght' 700, 'GRAD' 200, 'opsz' 48" }}>verified_user</span>
                                   ) : (
-                                    <span className="text-[78px] leading-none" aria-hidden="true">⚠️</span>
+                                    <span className="text-[84px] leading-none" aria-hidden="true">⚠️</span>
                                   )}
                                 </div>
                               </div>

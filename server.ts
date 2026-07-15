@@ -5,9 +5,16 @@ import path from "path";
 import fs from "fs";
 import { randomUUID } from 'crypto';
 import { exec, spawn } from "child_process";
-import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import { GEMINI_BENCHMARK_POLICY } from './src/services/deliverabilityBenchmarks';
+
+// Electron supplies these paths in packaged mode. Keeping the resource bundle
+// read-only and all user-created state in userData makes the backend portable
+// when it is launched from /Applications rather than the repository.
+const RESOURCE_ROOT = process.env.EDQ_RESOURCE_PATH || process.cwd();
+const USER_DATA_ROOT = process.env.EDQ_USER_DATA_PATH || RESOURCE_ROOT;
+const ELECTRON_PACKAGED = process.env.EDQ_ELECTRON_PACKAGED === 'true';
+const resourcePath = (...parts: string[]) => path.join(RESOURCE_ROOT, ...parts);
 
 type CheckMxStatus = 'critical' | 'warning' | 'info' | 'success';
 
@@ -71,6 +78,12 @@ if (!geminiApiKey) {
 }
 const ai = new GoogleGenAI({ apiKey: geminiApiKey, httpOptions: { headers: { 'X-goog-api-key': geminiApiKey } } });
 
+function redactDiagnostic(value: unknown) {
+  return String(value ?? '')
+    .replace(geminiApiKey, '[redacted]')
+    .replace(/(?:AIza|AQ\.)[A-Za-z0-9._-]{20,}/g, '[redacted]');
+}
+
 /** Text-output models available for selection. Keep in sync with Settings.tsx */
 export const GEMINI_TEXT_MODELS: { id: string; label: string }[] = [
   { id: 'gemini-2.5-flash',      label: 'Gemini 2.5 Flash' },
@@ -89,17 +102,19 @@ export const GEMINI_TEXT_MODELS: { id: string; label: string }[] = [
 
 /** Currently active model — mutable at runtime via POST /api/gemini/model */
 const GEMINI_MODEL_STATE_PATH = process.env.EDQ_GEMINI_MODEL_FILE
-  || path.join(process.env.HOME || process.cwd(), '.edq-dash', 'gemini_model');
+  || path.join(USER_DATA_ROOT, 'settings', 'gemini_model');
+
+const DEFAULT_GEMINI_MODEL = ELECTRON_PACKAGED ? 'gemini-3.1-flash-lite' : 'gemini-3.1-flash-lite';
 
 let activeGeminiModel: string = (() => {
   try {
     const stored = fs.existsSync(GEMINI_MODEL_STATE_PATH)
       ? fs.readFileSync(GEMINI_MODEL_STATE_PATH, 'utf-8').trim()
-      : fs.existsSync('.gemini_model')
+      : !ELECTRON_PACKAGED && fs.existsSync('.gemini_model')
         ? fs.readFileSync('.gemini_model', 'utf-8').trim()
         : '';
-    return GEMINI_TEXT_MODELS.some(m => m.id === stored) ? stored : 'gemini-3.1-flash-lite';
-  } catch { return 'gemini-3.1-flash-lite'; }
+    return GEMINI_TEXT_MODELS.some(m => m.id === stored) ? stored : DEFAULT_GEMINI_MODEL;
+  } catch { return DEFAULT_GEMINI_MODEL; }
 })();
 
 const MODEL_BUDGETS = { guideChars: 80000, historyChars: 30000 };
@@ -254,7 +269,7 @@ import { readFileSync } from "fs";
 import { parseCaseDataset, isClosedCase, type CaseRecord } from "./src/services/caseDataset";
 import { parseHistoricalDataset, dailySeries, type HistoricalMetricRecord } from "./src/services/historicalMetricsDataset";
 
-const CONV_DIR = path.join(process.cwd(), 'conversations');
+const CONV_DIR = path.join(USER_DATA_ROOT, 'conversations');
 if (!fs.existsSync(CONV_DIR)) fs.mkdirSync(CONV_DIR, { recursive: true });
 
 // Programmatic seeding on startup
@@ -266,7 +281,7 @@ checkAndPrepopulate();
 // it works regardless of the process cwd.
 function loadCases(): CaseRecord[] {
   const candidates = [
-    path.join(process.cwd(), 'public', 'data', 'uk_supermarket_email_deliverability_cases_final.csv'),
+    resourcePath('public', 'data', 'uk_supermarket_email_deliverability_cases_final.csv'),
   ];
   for (const p of candidates) {
     try {
@@ -290,7 +305,7 @@ const cases: CaseRecord[] = loadCases();
 
 function loadHistory(): HistoricalMetricRecord[] {
   const candidates = [
-    path.join(process.cwd(), 'public', 'data', 'uk_supermarket_email_deliverability_history_final.csv'),
+    resourcePath('public', 'data', 'uk_supermarket_email_deliverability_history_final.csv'),
   ];
   for (const p of candidates) {
     try {
@@ -726,7 +741,7 @@ async function callGemini(
     });
     return response.text ?? '';
   } catch (err: any) {
-    console.error("[Gemini API] callGemini failed:", err);
+    console.error("[Gemini API] callGemini failed:", redactDiagnostic(cleanGeminiErrorMessage(err)));
     const clean = cleanGeminiErrorMessage(err);
     const wrapped = new Error(isGeminiQuotaError(err) ? modelUnavailablePayload().error : clean);
     (wrapped as any).code = err?.code ?? err?.status;
@@ -1115,7 +1130,7 @@ function generateOfflineRAGAnswer(prompt: string, context: string, sources: stri
   try {
     const mainSource = sources[0];
     const cleanPath = mainSource.replace(/^docs\/User Guide\//, "");
-    const fullPath = path.join(process.cwd(), "braze_user_guide_md", "docs", "User Guide", cleanPath);
+    const fullPath = resourcePath("braze_user_guide_md", "docs", "User Guide", cleanPath);
     if (fs.existsSync(fullPath)) {
       const content = fs.readFileSync(fullPath, "utf-8");
       // Clean up headers and text
@@ -1161,7 +1176,7 @@ ${sources.map(s => `- **${path.basename(s).replace(/\.md$/, '').replace(/_/g, ' 
 // Find the first synced guide file whose path contains a fragment; returns the
 // githubPath form (or null). Used to map a topic to a known Braze doc.
 function findGuideByFragment(fragment: string): string | null {
-  const baseDir = path.join(process.cwd(), "braze_user_guide_md");
+  const baseDir = resourcePath("braze_user_guide_md");
   if (!fs.existsSync(baseDir)) return null;
   const frag = fragment.toLowerCase();
   let found: string | null = null;
@@ -1364,7 +1379,7 @@ function getActiveGuideRagContext(screenText: string): { context: string; source
   const guidePath = screenText.match(/^Active guide path:\s*(.+)$/mi)?.[1]?.trim();
   if (!guidePath) return null;
   const cleanPath = guidePath.replace(/^docs\/User Guide\//, '');
-  const fullPath = path.join(process.cwd(), 'braze_user_guide_md', 'docs', 'User Guide', cleanPath);
+  const fullPath = resourcePath('braze_user_guide_md', 'docs', 'User Guide', cleanPath);
   if (!fs.existsSync(fullPath)) return null;
   const content = fs.readFileSync(fullPath, 'utf-8');
   return { context: `SOURCE FILE PATH: ${guidePath}\n---\n${content}\n---`, sources: [guidePath] };
@@ -1418,6 +1433,12 @@ const DNS_STATUS_TEXT: Record<number, string> = {
   5: 'REFUSED',
 };
 const dnsCache = new Map<string, { expiresAt: number; lookup: any }>();
+type Availability = 'unknown' | 'available' | 'missing_key' | 'invalid_key' | 'quota' | 'model_unavailable' | 'offline' | 'timeout' | 'unavailable';
+const runtimeHealth: { gemini: Availability; dns: Availability; checkedAt: string | null } = {
+  gemini: geminiApiKey ? 'unknown' : 'missing_key',
+  dns: 'unknown',
+  checkedAt: null,
+};
 
 function normalizeDnsName(input: string): string {
   let name = String(input || '').trim();
@@ -1498,6 +1519,37 @@ async function resolveGoogleDnsInternal(rawName: string, rawType: string, option
   };
   dnsCache.set(cacheKey, { expiresAt: Date.now() + ttlMs, lookup });
   return lookup;
+}
+
+function classifyGeminiAvailability(error: unknown): Availability {
+  const message = redactDiagnostic(cleanGeminiErrorMessage(error)).toLowerCase();
+  if (/quota|429|rate limit|resource exhausted/.test(message)) return 'quota';
+  if (/model.*(?:not found|unavailable)|not supported/.test(message)) return 'model_unavailable';
+  if (/invalid.*key|api key|unauthenticated|permission denied|403|401/.test(message)) return 'invalid_key';
+  if (/timeout|timed out|abort/.test(message)) return 'timeout';
+  if (/network|fetch|enotfound|econn|offline/.test(message)) return 'offline';
+  return 'unavailable';
+}
+
+async function refreshRuntimeHealth() {
+  try {
+    await resolveGoogleDnsInternal('example.com', 'TXT', { force: true });
+    runtimeHealth.dns = 'available';
+  } catch {
+    runtimeHealth.dns = 'offline';
+  }
+
+  if (!geminiApiKey) {
+    runtimeHealth.gemini = 'missing_key';
+  } else {
+    try {
+      await callGemini([{ role: 'user', content: 'Reply with OK.' }], 0, { maxTokens: 4, timeoutMs: 8_000 });
+      runtimeHealth.gemini = 'available';
+    } catch (error) {
+      runtimeHealth.gemini = classifyGeminiAvailability(error);
+    }
+  }
+  runtimeHealth.checkedAt = new Date().toISOString();
 }
 
 function uniq(values: Array<string | undefined | null>): string[] {
@@ -1667,8 +1719,19 @@ async function startServer() {
 
   registerMailProviderStatusRoute(app);
   const PORT = parseInt(process.env.PORT || '3000', 10);
+  const HOST = process.env.EDQ_HOST || '127.0.0.1';
 
   app.use(express.json());
+
+  app.get('/api/health', (_req, res) => {
+    res.json({
+      ok: true,
+      backend: 'ok',
+      gemini: { configured: !!geminiApiKey, status: runtimeHealth.gemini, defaultModel: DEFAULT_GEMINI_MODEL, activeModel: activeGeminiModel },
+      dns: { status: runtimeHealth.dns, resolver: 'Google Public DNS' },
+      checkedAt: runtimeHealth.checkedAt,
+    });
+  });
 
 
 
@@ -1680,6 +1743,7 @@ async function startServer() {
   // file's mtime triggers a clean process restart; if not watched, exit so an
   // external supervisor can relaunch.
   app.post('/api/server/restart', (_req, res) => {
+    if (ELECTRON_PACKAGED) return res.status(403).json({ error: 'Restart is unavailable in the packaged app.' });
     res.json({ ok: true });
     setTimeout(() => {
       try {
@@ -1836,7 +1900,7 @@ async function startServer() {
   // User Guide API: Get list of documents and their sync status
   app.get("/api/user-guide/files", (req, res) => {
     try {
-      const statePath = path.join(process.cwd(), "braze_user_guide_state.json");
+      const statePath = resourcePath("braze_user_guide_state.json");
       if (!fs.existsSync(statePath)) {
         return res.json({ files: [] });
       }
@@ -1844,9 +1908,9 @@ async function startServer() {
       const state = JSON.parse(rawState);
 
       // Let's check which files actually exist locally on the disk
-      const mdDir = path.join(process.cwd(), "braze_user_guide_md");
+      const mdDir = resourcePath("braze_user_guide_md");
       const filesList = Object.entries(state).map(([githubPath, details]: [string, any]) => {
-        const localPath = path.join(process.cwd(), details.local_path);
+        const localPath = resourcePath(details.local_path);
         const existsLocally = fs.existsSync(localPath);
         return {
           githubPath,
@@ -1868,6 +1932,7 @@ async function startServer() {
 
   // User Guide API: Trigger file synchronization using python sync script
   app.post("/api/user-guide/sync", (req, res) => {
+    if (ELECTRON_PACKAGED) return res.status(403).json({ error: 'User Guide sync is disabled in the packaged preview.' });
     console.log("Triggering python syncer script...");
     exec("python3 sync_user_guide.py", (error, stdout, stderr) => {
       if (error) {
@@ -1884,13 +1949,14 @@ async function startServer() {
 
   // User Guide API: Sync a single file directly from raw.githubusercontent.com bypassing rate-limit
   app.post("/api/user-guide/sync-single", async (req, res) => {
+    if (ELECTRON_PACKAGED) return res.status(403).json({ error: 'User Guide sync is disabled in the packaged preview.' });
     try {
       const { path: githubPath } = req.body;
       if (!githubPath) {
         return res.status(400).json({ error: "Missing 'path' parameter." });
       }
 
-      const statePath = path.join(process.cwd(), "braze_user_guide_state.json");
+      const statePath = resourcePath("braze_user_guide_state.json");
       if (!fs.existsSync(statePath)) {
         return res.status(500).json({ error: "State file not found." });
       }
@@ -1910,7 +1976,7 @@ async function startServer() {
       const markdownContent = await response.text();
 
       // Write locally
-      const localPath = path.join(process.cwd(), details.local_path);
+      const localPath = resourcePath(details.local_path);
       fs.mkdirSync(path.dirname(localPath), { recursive: true });
       fs.writeFileSync(localPath, markdownContent, "utf-8");
 
@@ -1934,7 +2000,7 @@ async function startServer() {
       }
 
       const cleanPath = githubPath.replace(/^docs\/User Guide\//, "");
-      const fullPath = path.join(process.cwd(), "braze_user_guide_md", "docs", "User Guide", cleanPath);
+      const fullPath = resourcePath("braze_user_guide_md", "docs", "User Guide", cleanPath);
 
       if (!fs.existsSync(fullPath)) {
         return res.status(404).json({ error: `File not found locally: ${githubPath}. You might need to sync it.` });
@@ -1954,7 +2020,7 @@ async function startServer() {
       const q = (req.query.q as string || "").toLowerCase().trim();
       if (!q || q.length < 2) return res.json({ guides: [] });
       const tokens = q.split(/\s+/).filter(t => t.length > 1);
-      const mdDir = path.join(process.cwd(), "braze_user_guide_md");
+      const mdDir = resourcePath("braze_user_guide_md");
       if (!fs.existsSync(mdDir)) return res.json({ guides: [] });
 
       const results: { path: string; title: string; score: number }[] = [];
@@ -3040,6 +3106,7 @@ Is Shared IP Pool B blocked?`;
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
@@ -3052,7 +3119,7 @@ Is Shared IP Pool B blocked?`;
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = resourcePath('dist');
     app.use(express.static(distPath));
     app.get('*all', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
@@ -3073,13 +3140,27 @@ Is Shared IP Pool B blocked?`;
   };
   app.post('/api/heartbeat', (_req, res) => { resetTabWatchdog(); res.json({ ok: true, autoShutdownOnHeartbeatLoss }); });
 
-  app.listen(PORT, async () => {
-    console.log(`Server running on port ${PORT}`);
+  const server = app.listen(PORT, HOST, async () => {
+    const address = server.address();
+    const port = typeof address === 'object' && address ? address.port : PORT;
+    console.log(`[EDQ] Backend ready on http://${HOST}:${port}`);
+    const readyFile = process.env.EDQ_READY_FILE;
+    if (readyFile) {
+      try {
+        fs.mkdirSync(path.dirname(readyFile), { recursive: true });
+        fs.writeFileSync(readyFile, JSON.stringify({ host: HOST, port }), 'utf8');
+      } catch (error) {
+        console.error('[EDQ] Unable to write backend readiness file:', redactDiagnostic(error));
+      }
+    }
+    void refreshRuntimeHealth();
 
-    // Write a server startup script that programmatically opens a secure tunnel for port 3000
-    try {
-      console.log(`[Tunnel] Opening programmatically integrated secure connection tunnel for port ${PORT}...`);
-      const tunnel = await localtunnel({ port: PORT });
+    // A public tunnel is opt-in for local development only. Packaged previews
+    // never create one: all API traffic remains on loopback.
+    if (!ELECTRON_PACKAGED && process.env.EDQ_ENABLE_TUNNEL === 'true') {
+      try {
+        console.log(`[Tunnel] Opening local development tunnel for port ${port}...`);
+        const tunnel = await localtunnel({ port });
       
       tunnel.on('error', (err) => {
         console.error('[Tunnel Error] Secure connection tunnel encountered an error:', err.message || err);
@@ -3093,8 +3174,9 @@ Is Shared IP Pool B blocked?`;
       tunnel.on('close', () => {
         console.log('[Tunnel] Secure connection tunnel has closed.');
       });
-    } catch (err: any) {
-      console.error('[Tunnel Error] Failed to open localtunnel connection gracefully:', err.message || err);
+      } catch (err: any) {
+        console.error('[Tunnel Error] Failed to open localtunnel connection gracefully:', err.message || err);
+      }
     }
   });
 }

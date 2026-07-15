@@ -10,5 +10,9 @@
 build/
 coverage/
 dist/
+dist-electron/
+release/
+electron/preview-key.generated.json
+electron/preview-key.local.env
 node_modules/
 server.pid

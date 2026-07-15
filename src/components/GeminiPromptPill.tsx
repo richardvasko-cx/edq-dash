@@ -116,6 +116,20 @@ const REFINE_DISPLAY_LABEL: Record<'shorter' | 'technical' | 'data' | 'formal' |
   standard: 'Standard',
 };
 
+// Suggested questions are an action affordance, not a summary. Keep them as
+// brief as the local app even if a remote model ignores its word limit.
+function compactStarterSuggestion(value: string): string {
+  const cleaned = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return '';
+  const withoutPunctuation = cleaned.replace(/[.?!]+$/, '');
+  if (/^are there\b/i.test(withoutPunctuation)) return `Check ${withoutPunctuation.replace(/^are there (?:any |other )?/i, '').split(' ').slice(0, 5).join(' ')}`;
+  if (/^have you\b/i.test(withoutPunctuation)) return `Review ${withoutPunctuation.replace(/^have you (?:reviewed|checked|requested|confirmed)\s+/i, '').split(' ').slice(0, 5).join(' ')}`;
+  if (/^can you\b/i.test(withoutPunctuation)) return `Check ${withoutPunctuation.replace(/^can you (?:confirm|check|review)\s+/i, '').split(' ').slice(0, 5).join(' ')}`;
+  const words = withoutPunctuation.split(' ').filter(Boolean);
+  const compact = words.slice(0, 6).join(' ').replace(/[,:;]+$/, '');
+  return /^(how|what|why|when)\b/i.test(compact) ? `${compact}?` : compact;
+}
+
 function workspacePanelLabel(label?: string): string {
   return (label || '').split(' · ')[0].trim();
 }
@@ -489,7 +503,13 @@ export default function GeminiPromptPill({
       body: JSON.stringify({ screen }),
     })
       .then(r => r.json())
-      .then(d => { if (!cancelled) setPillStarters(Array.isArray(d.suggestions) ? d.suggestions.slice(0, 3) : []); })
+      .then(d => {
+        if (!cancelled) {
+          setPillStarters(Array.isArray(d.suggestions)
+            ? d.suggestions.map(compactStarterSuggestion).filter(Boolean).slice(0, 3)
+            : []);
+        }
+      })
       .catch(() => {})
       .finally(() => { if (!cancelled) setPillStartersLoading(false); });
     return () => { cancelled = true; };
@@ -1878,7 +1898,7 @@ export default function GeminiPromptPill({
                           'Check SPF/DKIM setup',
                           'IP warming guidance',
                         ]
-                    ).slice(0, 3).map((s, i) => (
+                    ).slice(0, 3).map(compactStarterSuggestion).filter(Boolean).map((s, i) => (
                       <motion.button type="button"
                         key={i}
                         initial={{ opacity: 0, y: 8, scale: 0.94 }}
