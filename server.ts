@@ -154,7 +154,7 @@ const GEMINI_CHART_POLICY = `CHART POLICY — charts are decided by a separate s
 - In the main answer, use prose, bullets, or compact Markdown tables.
 - A follow-up Gemini API call will decide whether a chart is useful and will return a structured chart object only when appropriate.`;
 const APP_FEATURE_CONTEXT = `DASHBOARD APP MAP — you are embedded in this app and can help the user understand and navigate it:
-- Dashboard: overview of demo email deliverability health, top accounts, alerts, and performance snapshots.
+- Dashboard: EDQ's internal support-operations overview: ticket intake, resolutions, active backlog, at-risk accounts, owners and account exposure. It is not the public Braze product dashboard.
 - Tickets: case list and investigation workspace for account-level deliverability issues. The list can be searched by account, case number, subject, and domain.
 - Ticket workspace sections: Customer Issue, Root Cause, Authentication, Deliverability, Email Performance, Support History, and final workspace output.
 - Tools > Google Dig: DNS lookup helper for SPF, DKIM, DMARC, MX, TXT, A and related DNS records.
@@ -164,6 +164,11 @@ const APP_FEATURE_CONTEXT = `DASHBOARD APP MAP — you are embedded in this app 
 - User Guide: searchable Braze User Guide articles with copy-for-LLM, markdown view, and Ask Gemini.
 - Settings: app, Gemini API/model, theme, and configuration controls.
 When the user explicitly asks about a feature, panel, tab, or tool in this app, explain what it does, how to use it in this dashboard, and give one practical next step. The UI may attach a navigation button separately; do not fabricate controls beyond this map and the live screen context.`;
+const INTERNAL_DASHBOARD_IDENTITY = `INTERNAL EDQ DASHBOARD IDENTITY — this interface is EDQ, an internal support-operations dashboard using Braze-style branding. It is NOT the public Braze product and it is not connected to a customer's Braze tenant.
+- Dashboard cards describe EDQ support work: "Ticket intake" means cases opened; "Weekly flow" compares cases opened and resolved; "open now" is the active support backlog; and "queue up/down" is the week-over-week backlog movement.
+- When the question is about a Dashboard card, analyse the supplied internal queue, resolution, backlog, ageing, ownership and account-risk figures. For Ticket intake, assess intake versus resolved work, backlog direction and resolution rate from the available values.
+- Never recommend, reference or instruct the user to use public Braze product surfaces such as Dashboard Builder, Messaging Diagnostics, Currents or customer reporting unless they explicitly ask about that Braze feature.
+- Do not substitute campaign/segment engagement analysis for an internal ticket-queue question, and do not claim a trend cannot be analysed when the case database or queue figures provide the needed evidence.`;
 const APP_ACTION_GUIDANCE = `APP FEATURE SUGGESTIONS — keep app navigation secondary:
 - Do not turn a deliverability concept question into a tool-first answer. If the user asks about IP warming, warm-up, deliverability, DNS, authentication, bounces, complaints, reputation, or best practices, answer the domain best practice and steps FIRST.
 - Mention an app tool only as an optional final next step when it genuinely helps apply the advice in this dashboard.
@@ -642,6 +647,90 @@ function buildHistoryTickets(ref: { id?: string; account?: string } | undefined)
   const focused = refId ? cases.find(c => c.case_number === refId) : undefined;
   const tickets = cases.filter(isClosedCase).map(caseToTicketLike);
   return { tickets, resolvedAccount: focused?.account_name ?? ref?.account };
+}
+
+// The case CSV is the application's database. Gemini should be able to reason
+// over its complete operational picture, but a prompt should receive a compact,
+// relevant retrieval set rather than every row indiscriminately. This keeps
+// answers grounded and avoids exposing unrelated account identifiers.
+function buildDatasetIntelligenceContext(query: string, ref: { id?: string; account?: string } | undefined): string {
+  if (!cases.length) return '(case database unavailable)';
+
+  const focused = ref?.id ? cases.find(c => c.case_number === ref.id) : undefined;
+  const focusedAccount = focused?.account_name ?? ref?.account;
+  const reference = [...cases]
+    .map(c => c.case_updated_at || c.case_closed_at || c.case_created_at)
+    .filter(Boolean)
+    .sort()
+    .at(-1);
+  const asOf = reference ? new Date(reference) : new Date();
+  const weekAgo = new Date(asOf);
+  weekAgo.setDate(weekAgo.getDate() - 7);
+  const open = cases.filter(c => c.case_status === 'Open' || c.case_status === 'In Progress');
+  const closed = cases.filter(isClosedCase);
+  const openedThisWeek = cases.filter(c => {
+    const created = new Date(c.case_created_at);
+    return created >= weekAgo && created <= asOf;
+  });
+  const resolvedThisWeek = closed.filter(c => {
+    const closedAt = c.case_closed_at ? new Date(c.case_closed_at) : null;
+    return !!closedAt && closedAt >= weekAgo && closedAt <= asOf;
+  });
+  const atWeekAgo = cases.filter(c => {
+    const created = new Date(c.case_created_at);
+    const closedAt = c.case_closed_at ? new Date(c.case_closed_at) : null;
+    return created <= weekAgo && (!closedAt || closedAt > weekAgo);
+  });
+  const priorityOpen = open.filter(c => c.case_priority === 'Critical' || c.case_priority === 'High').length;
+  const queryTerms = String(query || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, ' ')
+    .split(/\s+/)
+    .filter(term => term.length > 2 && !new Set(['the', 'and', 'with', 'this', 'that', 'from', 'ticket', 'case', 'data', 'dashboard', 'trend', 'analyse', 'analyze']).has(term));
+  const requestedCaseIds = new Set((String(query || '').match(/\b\d{8}\b/g) || []));
+  const compactSameAccount = (c: CaseRecord) => [
+    `Case ${c.case_number} [${c.case_status}, ${c.case_priority}]`,
+    `opened ${c.case_created_at || 'n/a'}${c.case_closed_at ? `; closed ${c.case_closed_at}` : ''}`,
+    `issue: ${c.case_subject}`,
+    `root cause: ${c.root_cause_summary || 'n/a'}`,
+    c.resolution_summary ? `resolution: ${c.resolution_summary}` : '',
+    `metrics: accepted ${(c.metrics.accepted_rate * 100).toFixed(1)}%, bounce ${(c.metrics.bounce_rate * 100).toFixed(1)}%, open ${(c.metrics.nonprefetched_open_rate * 100).toFixed(1)}%`,
+    `auth: SPF ${c.spf_status}, DKIM ${c.dkim_status}, DMARC ${c.dmarc_status}`,
+  ].filter(Boolean).join(' — ');
+  const compactPeer = (c: CaseRecord) => [
+    `Peer ${c.case_status.toLowerCase()} ${c.case_priority.toLowerCase()} case`,
+    `issue type: ${c.issue_type || 'n/a'}`,
+    `pattern: ${c.root_cause_summary || 'n/a'}`,
+    c.resolution_summary ? `resolution: ${c.resolution_summary}` : '',
+    `auth: SPF ${c.spf_status}, DKIM ${c.dkim_status}, DMARC ${c.dmarc_status}`,
+  ].filter(Boolean).join(' — ');
+  const scored = cases
+    .filter(c => c.case_number !== focused?.case_number)
+    .map(c => {
+      const haystack = [c.case_number, c.account_name, c.case_subject, c.issue_type, c.root_cause_summary, c.resolution_summary, ...c.tags, ...c.sending_domains, ...c.mailbox_providers].join(' ').toLowerCase();
+      const score = queryTerms.reduce((total, term) => total + (haystack.includes(term) ? 1 : 0), 0)
+        + (requestedCaseIds.has(c.case_number) ? 20 : 0)
+        + (focusedAccount && c.account_name === focusedAccount ? 8 : 0);
+      return { c, score };
+    })
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 6);
+  const sameAccount = scored.filter(item => item.c.account_name === focusedAccount).map(item => compactSameAccount(item.c));
+  const requestedOrRelevant = scored
+    .filter(item => item.c.account_name !== focusedAccount)
+    .map(item => requestedCaseIds.has(item.c.case_number) ? compactSameAccount(item.c) : compactPeer(item.c));
+
+  const lines = [
+    '=== BACKGROUND CASE DATABASE INTELLIGENCE ===',
+    `Dataset scope: ${cases.length} support cases (${open.length} open/in progress, ${closed.length} closed); ${priorityOpen} current critical/high-priority cases.`,
+    `Queue movement as of ${reference || 'latest available date'}: ${openedThisWeek.length} opened in the last 7 days, ${resolvedThisWeek.length} resolved, ${open.length} active now, ${open.length - atWeekAgo.length >= 0 ? '+' : ''}${open.length - atWeekAgo.length} backlog change.`,
+    focused ? `Focused account: ${focused.account_name}. Its current case is ${focused.case_number}; use its full ticket context as the primary subject.` : '',
+    sameAccount.length ? `Same-account records (full fidelity):\n${sameAccount.map(line => `- ${line}`).join('\n')}` : '',
+    requestedOrRelevant.length ? `Relevant database retrieval (use identifiers only when the user asked for or needs a case distinction):\n${requestedOrRelevant.map(line => `- ${line}`).join('\n')}` : '',
+    'Use this background retrieval when material. Do not list case IDs merely because they were retrieved; state an ID only when it helps identify, compare or action a specific case.',
+  ].filter(Boolean);
+  return lines.join('\n');
 }
 
 // Read-only Looker webhook ingest. The canonical dataset is the sole source of
@@ -2158,6 +2247,7 @@ async function startServer() {
       // other accounts PII-scrubbed — entirely on-device over the closed cases.
       const { tickets: historyTickets, resolvedAccount } = buildHistoryTickets(ticketRef);
       const ticketMemory = searchHistoricalTickets(`${prompt} ${screenText}`, { id: ticketRef?.id, account: resolvedAccount }, historyTickets);
+      const datasetIntelligence = buildDatasetIntelligenceContext(`${prompt} ${screenText}`, ticketRef);
 
       // Cap the guide context to leave room for history + answer within the
       // model's context window (budget scales with the configured model).
@@ -2222,7 +2312,7 @@ MULTI-PANEL RULE — the agent pinned ${pinnedPanelCount} separate panels (each 
 
       // No longer restricted to "only the context" — the model is told to combine
       // its own knowledge, the Braze guide excerpts, and the live on-screen data.
-      const systemPrompt = `You are Gemini — an email-deliverability troubleshooting expert embedded in a Braze support dashboard. Your job is to help a support agent diagnose and resolve customer deliverability issues quickly. You answer as a specialist, not a generalist.
+      const systemPrompt = `You are Gemini — an email-deliverability troubleshooting expert embedded in EDQ, an internal support-operations dashboard using Braze-style branding. Your job is to help a support agent diagnose and resolve customer deliverability issues quickly. You answer as a specialist, not a generalist.
 
 WHAT TO WEIGH (in order of priority):
 0. USER-PINNED PANEL DATA (see block below) — the agent manually selected these modules. If present, they are the primary subject. Analyse them directly and cite their specific values. If more than one panel is pinned, follow the MULTI-PANEL RULE below — do not assume the panels are related.
@@ -2234,6 +2324,8 @@ WHAT TO WEIGH (in order of priority):
 5. Cross-account historical precedents (HISTORICAL TICKET CONTEXT, anonymized) — use ONLY to recognise patterns and suggest fixes that have worked. Do not centre your answer on them; they are a sanity check, not the main subject.
 
 ${APP_FEATURE_CONTEXT}
+
+${INTERNAL_DASHBOARD_IDENTITY}
 
 ${APP_ACTION_GUIDANCE}
 
@@ -2281,6 +2373,8 @@ ${selectedPanelBlock.slice(0, 2500)}` : ''}
 === LIVE ON-SCREEN CONTEXT ===
 ${screenBlock}${accountInfrastructureBlock}
 ${dailyHistoryBlock ? `\n\n${dailyHistoryBlock}` : ''}
+
+${datasetIntelligence}
 
 === BRAZE USER GUIDE EXCERPTS ===
 ${trimmedContext}
@@ -2399,6 +2493,7 @@ Return ONLY the answer in Markdown. Do not add a "SUGGESTIONS" section or follow
         : { context: '', sources: [] as string[] });
       const { tickets: historyTickets, resolvedAccount } = buildHistoryTickets(ticketRef);
       const ticketMemory = searchHistoricalTickets(`${prompt} ${screenText}`, { id: ticketRef?.id, account: resolvedAccount }, historyTickets);
+      const datasetIntelligence = buildDatasetIntelligenceContext(`${prompt} ${screenText}`, ticketRef);
 
       const trimmedContext = context && context.length > MODEL_BUDGETS.guideChars
         ? context.slice(0, MODEL_BUDGETS.guideChars) + '\n\n[...truncated...]'
@@ -2452,7 +2547,7 @@ MULTI-PANEL RULE — the agent pinned ${pinnedPanelCountS} separate panels (each
 ` : '';
       const sourceAttestation = buildSourceAttestationInstruction(screenText, selectedPanelBlockS, sources, ticketMemory.sameAccountCount);
 
-      const systemPrompt = `You are Gemini — an email-deliverability troubleshooting expert embedded in a Braze support dashboard. Your job is to help a support agent diagnose and resolve customer deliverability issues quickly. You answer as a specialist, not a generalist.
+      const systemPrompt = `You are Gemini — an email-deliverability troubleshooting expert embedded in EDQ, an internal support-operations dashboard using Braze-style branding. Your job is to help a support agent diagnose and resolve customer deliverability issues quickly. You answer as a specialist, not a generalist.
 
 WHAT TO WEIGH (in order of priority):
 0. USER-PINNED PANEL DATA (see block below) — the agent manually selected these modules. If present, they are the primary subject. Analyse them directly and cite their specific values. If more than one panel is pinned, follow the MULTI-PANEL RULE below — do not assume the panels are related.
@@ -2463,6 +2558,8 @@ WHAT TO WEIGH (in order of priority):
 5. Cross-account historical precedents (HISTORICAL TICKET CONTEXT, anonymized) — use ONLY to recognise patterns and suggest fixes that have worked. Do not centre your answer on them; they are a sanity check, not the main subject.
 
 ${APP_FEATURE_CONTEXT}
+
+${INTERNAL_DASHBOARD_IDENTITY}
 
 ${APP_ACTION_GUIDANCE}
 
@@ -2510,6 +2607,8 @@ ${selectedPanelBlockS.slice(0, 2500)}` : ''}
 === LIVE ON-SCREEN CONTEXT ===
 ${screenBlock}${accountInfrastructureBlockS}${highlightedBlock}
 ${dailyHistoryBlockS ? `\n\n${dailyHistoryBlockS}` : ''}
+
+${datasetIntelligence}
 
 === BRAZE USER GUIDE EXCERPTS ===
 ${trimmedContext}
