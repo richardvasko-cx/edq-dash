@@ -414,6 +414,7 @@ function matchArticles(ticket: CaseRecord | null): MatchedArticle[] {
   if (!ticket) return [];
   const hay = `${ticket.case_subject} ${ticket.root_cause_summary} ${(ticket.tags || []).join(' ')}`.toLowerCase();
   const lib = [
+    { title: 'Warming IPs after rapid volume growth', keys: 'ip warming sending volume ramp rate', section: 'Deliverability', match: /\b421\b|rate.?limit|volume.*(spike|increase|burst)|rapid.*volume|ip warm|warming/ },
     { title: 'Understanding SPF, DKIM and DMARC alignment', keys: 'spf dkim dmarc authentication', section: 'Authentication', match: /spf|dkim|dmarc|permerror|quarantine|alignment/ },
     { title: 'Recovering from Gmail throttling and deferrals', keys: 'gmail throttling deferral', section: 'Deliverability', match: /gmail|deferral|throttl/ },
     { title: 'Resolving Microsoft (Outlook) blocks', keys: 'microsoft outlook block', section: 'Deliverability', match: /microsoft|outlook|hotmail|s3140/ },

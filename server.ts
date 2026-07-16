@@ -1307,6 +1307,7 @@ function findGuideByFragment(fragment: string): string | null {
 // Topic → guide-path fragment rules. Order is priority order for suggestions.
 const ARTICLE_TOPIC_RULES: [RegExp, string][] = [
   [/\b(spf|dkim|dmarc|authenticat|dns record|alignment|signature)\b/, 'email_setup/authentication'],
+  [/\b(421|4\.7\.|rate.?limit|volume spike|rapid volume|sending rate|send(?:ing)? burst|slow(?:ing)? down)\b/, 'email_setup/ip_warming'],
   [/\b(ip warm|warming|ramp|new ip|dedicated ip)\b/, 'email_setup/ip_warming'],
   [/\b(spam trap|pitfall|blocklist|blacklist|honeypot|junk folder)\b/, 'deliverability_pitfalls_and_spam_traps'],
   [/\b(list hygiene|sunset|stale|invalid recipient|suppress|inactive)\b/, 'best_practices/improve_deliverability'],
@@ -1338,8 +1339,38 @@ function pickArticlePath(queryText: string, ragSources: string[]): string | null
 
 const ARTICLE_INTENT_STOP_TERMS = new Set(['about', 'article', 'braze', 'can', 'create', 'do', 'first', 'for', 'guide', 'help', 'how', 'i', 'my', 'set', 'the', 'this', 'to', 'up', 'use', 'user', 'what', 'when', 'where', 'with', 'you', 'your']);
 
-function selectSuggestedArticlePaths(prompt: string, sources: string[], maxCards: number, activeGuidePath?: string): string[] {
-  const terms = (String(prompt).toLowerCase().match(/[a-z0-9_]+/g) || [])
+function getTicketArticleTopicText(ticketRef?: { id?: string }): string {
+  const ticket = ticketRef?.id ? cases.find(item => item.case_number === ticketRef.id) : null;
+  if (!ticket) return '';
+  return [
+    ticket.case_subject,
+    ticket.root_cause_summary,
+    ...(ticket.tags || []),
+    ...(ticket.bounces || []).flatMap(bounce => [bounce.classification, bounce.domain, bounce.reason]),
+  ].filter(Boolean).join(' ');
+}
+
+function selectSuggestedArticlePaths(
+  prompt: string,
+  sources: string[],
+  maxCards: number,
+  activeGuidePath?: string,
+  ticketRef?: { id?: string },
+  selectedPanelBlock = '',
+): string[] {
+  const diagnosticText = [prompt, getTicketArticleTopicText(ticketRef), selectedPanelBlock].filter(Boolean).join(' ');
+  const routed = mapAllArticlePaths(diagnosticText, [])
+    .filter(path => path !== activeGuidePath);
+  if (routed.length) return [...new Set(routed)].slice(0, maxCards);
+
+  // When no explicit signal is available, use the retrieved guide concepts. This
+  // deliberately comes after the ticket-aware route: a generic source such as
+  // "Customize the URL" must never outrank the actual case signal.
+  const sourceRouted = mapAllArticlePaths('', sources)
+    .filter(path => path !== activeGuidePath);
+  if (sourceRouted.length) return [...new Set(sourceRouted)].slice(0, maxCards);
+
+  const terms = (diagnosticText.toLowerCase().match(/[a-z0-9_]+/g) || [])
     .filter(term => term.length > 2 && !ARTICLE_INTENT_STOP_TERMS.has(term));
   if (!terms.length) return [];
   const ranked = sources
@@ -2419,7 +2450,7 @@ Return ONLY the answer in Markdown. Do not add a "SUGGESTIONS" section or follow
       const isAboutSpecificTicket = !!ticketRef?.id && /\b(this ticket|this customer|this account|the ticket|the customer)\b/.test(lower);
       const maxCards = isAboutSpecificTicket ? 1 : (isMultiTopic || isBestPractice ? 3 : 1);
       const activeGuidePath = screenText.match(/^Active guide path:\s*(.+)$/mi)?.[1]?.trim();
-      const articlePaths = isFocusedGuideArticle ? [] : selectSuggestedArticlePaths(prompt, sources, maxCards, activeGuidePath);
+      const articlePaths = isFocusedGuideArticle ? [] : selectSuggestedArticlePaths(prompt, sources, maxCards, activeGuidePath, ticketRef, selectedPanelBlock);
       const articles = articlePaths.map(toCard);
       // Keep the legacy single-article field for backwards compatibility with
       // anything still reading `article`.
@@ -2765,7 +2796,7 @@ Return ONLY the answer in Markdown. Do not add a "SUGGESTIONS" section.`;
       const isAboutSpecificTicket = !!ticketRef?.id && /\b(this ticket|this customer|this account|the ticket|the customer)\b/.test(lower);
       const maxCards = isAboutSpecificTicket ? 1 : (isMultiTopic || isBestPractice ? 3 : 1);
       const activeGuidePath = screenText.match(/^Active guide path:\s*(.+)$/mi)?.[1]?.trim();
-      const articlePaths = isFocusedGuideArticle ? [] : selectSuggestedArticlePaths(prompt, sources, maxCards, activeGuidePath);
+      const articlePaths = isFocusedGuideArticle ? [] : selectSuggestedArticlePaths(prompt, sources, maxCards, activeGuidePath, ticketRef, selectedPanelBlockS);
       const articles = articlePaths.map(toCard);
 
       const finalText = await appendGeminiDecidedChart({ prompt, answer: text, screenText, selectedPanelBlock: selectedPanelBlockS, sources, ticketRef });
