@@ -1339,8 +1339,8 @@ export default function GeminiPromptPill({
                                         </span>
                                       ))}
                                       {entry.searchGrounded && (
-                                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#1A73E8]/15 text-[#1A73E8] border border-[#1A73E8]/20">
-                                          <GoogleGIcon className="!h-[13px] !w-[13px] !text-[12px]" /> Search
+                                        <span className="inline-flex h-5 items-center gap-1 rounded-full border border-[#DADCE0] bg-[#F1F3F4] px-1.5 text-[10px] font-medium text-[#3C4043]">
+                                          <GoogleGIcon className="!h-[12px] !w-[12px]" /> Search
                                         </span>
                                       )}
                                     </div>
@@ -2258,10 +2258,10 @@ export default function GeminiPromptPill({
                       </span>
                     ))}
                     {searchGrounding && (
-                      <button type="button" onClick={e => { e.stopPropagation(); setSearchGrounding(false); }} className={cn('inline-flex items-center gap-1 rounded-lg px-2 py-0.5 text-[11px] font-semibold', isDark ? 'bg-white/10 text-[#D2E3FC]' : 'bg-[#D3E3FD] text-[#041e49]')}>
-                        <GoogleGIcon className="!h-[13px] !w-[13px] !text-[12px]" />
+                      <button type="button" onClick={e => { e.stopPropagation(); setSearchGrounding(false); }} aria-label="Remove Google Search grounding" className={cn('inline-flex h-6 items-center gap-1.5 rounded-full border px-2 text-[11px] font-medium shadow-sm transition-colors', isDark ? 'border-white/15 bg-white/10 text-white/90 hover:bg-white/15' : 'border-[#DADCE0] bg-[#F1F3F4] text-[#3C4043] hover:bg-[#E8EAED]')}>
+                        <GoogleGIcon className="!h-[14px] !w-[14px]" />
                         Search
-                        <span className="material-symbols-outlined text-[11px] opacity-50">close</span>
+                        <span className="material-symbols-outlined text-[13px] leading-none text-[#5F6368]">close</span>
                       </button>
                     )}
                     <div className="relative flex-1 min-w-[220px] min-h-6 max-h-[92px] overflow-hidden">
