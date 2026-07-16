@@ -464,6 +464,7 @@ export default function GeminiPromptPill({
         thinking: m.thinking,
         chips: m.chips?.map(c => ({ label: c.label, content: '' })),
         files: m.files,
+        searchGrounded: m.searchGrounded,
       }));
       setChatHistory(entries);
       setChatOpen(true);
@@ -487,6 +488,7 @@ export default function GeminiPromptPill({
         thinking: m.thinking,
         chips: m.chips?.map(c => ({ label: c.label, content: '' })),
         files: m.files,
+        searchGrounded: m.searchGrounded,
       }));
       setChatHistory(entries);
     }
@@ -1329,18 +1331,18 @@ export default function GeminiPromptPill({
                                   <div className="flex flex-col items-end gap-1">
                                     <div className="flex flex-wrap gap-1 justify-end">
                                       {entry.chips?.map(c => (
-                                        <span key={c.label} className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#1A73E8]/15 text-[#1A73E8] dark:bg-[#74BBFF]/15 dark:text-[#74BBFF] border border-[#1A73E8]/20 dark:border-[#74BBFF]/20">
+                                        <span key={c.label} className="inline-flex h-8 items-center rounded-full border border-[#B7CDF7] bg-[#D3E3FD] px-3 text-[12px] font-semibold text-[#0B57D0] dark:border-[#74BBFF]/25 dark:bg-[#74BBFF]/15 dark:text-[#AECBFA]">
                                           #{c.label}
                                         </span>
                                       ))}
                                       {entry.files?.map(file => (
-                                        <span key={file.name} className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#1A73E8]/15 text-[#1A73E8] dark:bg-[#74BBFF]/15 dark:text-[#74BBFF] border border-[#1A73E8]/20 dark:border-[#74BBFF]/20">
-                                          <span className="material-symbols-outlined text-[12px]">attach_file</span>{file.name}
+                                        <span key={file.name} className="inline-flex h-8 items-center gap-1.5 rounded-full border border-[#B7CDF7] bg-[#D3E3FD] px-3 text-[12px] font-semibold text-[#0B57D0] dark:border-[#74BBFF]/25 dark:bg-[#74BBFF]/15 dark:text-[#AECBFA]">
+                                          <span className="material-symbols-outlined text-[16px]">attach_file</span>{file.name}
                                         </span>
                                       ))}
                                       {entry.searchGrounded && (
-                                        <span className="inline-flex h-5 items-center gap-1 rounded-full border border-[#DADCE0] bg-[#F1F3F4] px-1.5 text-[10px] font-medium text-[#3C4043]">
-                                          <GoogleGIcon className="!h-[12px] !w-[12px]" /> Search
+                                        <span className="inline-flex h-8 items-center gap-2 rounded-full border border-[#D1D3D7] bg-[#E6E7E9] px-3 text-[12px] font-semibold text-[#3C4043]">
+                                          <GoogleGIcon className="!h-[19px] !w-[19px]" /> Search
                                         </span>
                                       )}
                                     </div>
@@ -1515,7 +1517,7 @@ export default function GeminiPromptPill({
                                     const finalEntries: ChatEntry[] = [...prev, { type: 'assistant' as const, text: ans, articles: arts }];
                                     setChatHistory(finalEntries);
                                     setIsLoading(false);
-                                    const apiMsgs = finalEntries.map(e => ({ role: e.type === 'user' ? 'user' : 'assistant', content: e.chips?.length ? [e.text, ...e.chips.map(c => `[Context — ${c.label}]:\n${c.content}`)].filter(Boolean).join('\n\n') : e.text, displayContent: e.displayText || null, chips: e.chips?.length ? e.chips.map(c => ({ label: c.label })) : null }));
+                                    const apiMsgs = finalEntries.map(e => ({ role: e.type === 'user' ? 'user' : 'assistant', content: e.chips?.length ? [e.text, ...e.chips.map(c => `[Context — ${c.label}]:\n${c.content}`)].filter(Boolean).join('\n\n') : e.text, displayContent: e.displayText || null, chips: e.chips?.length ? e.chips.map(c => ({ label: c.label })) : null, files: e.files?.length ? e.files : null, searchGrounded: e.searchGrounded || null, articles: e.articles?.length ? e.articles : null, actions: e.actions?.length ? e.actions : null, evidence: e.evidence?.length ? e.evidence : null }));
                                     fetch('/api/conversations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: conversationIdRef.current, title: conversationTitleFor(finalEntries), messages: apiMsgs, source: 'pill' }) }).then(r => r.json()).then(d => { if (d.id) conversationIdRef.current = d.id; }).catch(() => {});
                                   }).catch(err => {
                                     setChatHistory([...prev, { type: 'assistant' as const, text: `⚠️ Could not reach Gemini: ${err.message}` }]);
@@ -1590,7 +1592,7 @@ export default function GeminiPromptPill({
                                                 const finalEntries: ChatEntry[] = [...prev, { type: 'assistant' as const, text: ans, articles: arts }];
                                                 setChatHistory(finalEntries);
                                                 setIsLoading(false);
-                                                const apiMsgs = finalEntries.map(e => ({ role: e.type === 'user' ? 'user' : 'assistant', content: e.chips?.length ? [e.text, ...e.chips.map(c => `[Context — ${c.label}]:\n${c.content}`)].filter(Boolean).join('\n\n') : e.text, displayContent: e.displayText || null, chips: e.chips?.length ? e.chips.map(c => ({ label: c.label })) : null }));
+                                                const apiMsgs = finalEntries.map(e => ({ role: e.type === 'user' ? 'user' : 'assistant', content: e.chips?.length ? [e.text, ...e.chips.map(c => `[Context — ${c.label}]:\n${c.content}`)].filter(Boolean).join('\n\n') : e.text, displayContent: e.displayText || null, chips: e.chips?.length ? e.chips.map(c => ({ label: c.label })) : null, files: e.files?.length ? e.files : null, searchGrounded: e.searchGrounded || null, articles: e.articles?.length ? e.articles : null, actions: e.actions?.length ? e.actions : null, evidence: e.evidence?.length ? e.evidence : null }));
                                                 fetch('/api/conversations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: conversationIdRef.current, title: conversationTitleFor(finalEntries), messages: apiMsgs, source: 'pill' }) }).then(r => r.json()).then(d => { if (d.id) conversationIdRef.current = d.id; }).catch(() => {});
                                               }).catch(err => {
                                                 setChatHistory([...prev, { type: 'assistant' as const, text: `⚠️ Could not reach Gemini: ${err.message}` }]);
@@ -2181,11 +2183,11 @@ export default function GeminiPromptPill({
                             onSelectorToggle(true);
                           }}
                           className={cn(
-                            'w-full flex items-center gap-2.5 whitespace-nowrap px-4 py-2.5 text-[13px] font-medium transition-colors',
+                            'w-full flex items-center gap-3 whitespace-nowrap px-4 py-2.5 text-[13px] font-medium transition-colors',
                             isDark ? 'text-white/90 hover:bg-white/8' : 'text-[#1F1F1F] hover:bg-[#F1F3F4]',
                           )}
                         >
-                          <span className="material-symbols-outlined text-[18px] shrink-0">add_box</span>
+                          <span className="flex h-6 w-6 shrink-0 items-center justify-center"><span className="material-symbols-outlined text-[22px]">add_box</span></span>
                           Add context
                         </button>
                         <button
@@ -2196,24 +2198,24 @@ export default function GeminiPromptPill({
                             openFilePicker();
                           }}
                           className={cn(
-                            'w-full flex items-center gap-2.5 whitespace-nowrap px-4 py-2.5 text-[13px] font-medium transition-colors',
+                            'w-full flex items-center gap-3 whitespace-nowrap px-4 py-2.5 text-[13px] font-medium transition-colors',
                             isDark ? 'text-white/90 hover:bg-white/8' : 'text-[#1F1F1F] hover:bg-[#F1F3F4]',
                           )}
                         >
-                          <span className="material-symbols-outlined text-[18px] shrink-0">attach_file</span>
+                          <span className="flex h-6 w-6 shrink-0 items-center justify-center"><span className="material-symbols-outlined text-[22px]">attach_file</span></span>
                           Add files
                         </button>
                         <button
                           type="button"
                           onClick={e => { e.stopPropagation(); setSearchGrounding(v => !v); setIsPlusMenuOpen(false); setIsExpanded(true); }}
                           className={cn(
-                            'w-full flex items-center gap-2.5 whitespace-nowrap px-4 py-2.5 text-[13px] font-medium transition-colors',
+                            'w-full flex items-center gap-3 whitespace-nowrap px-4 py-2.5 text-[13px] font-medium transition-colors',
                             searchGrounding
                               ? isDark ? 'bg-white/10 text-[#D2E3FC]' : 'bg-[#E8F0FE] text-[#185ABC]'
                               : isDark ? 'text-white/90 hover:bg-white/8' : 'text-[#1F1F1F] hover:bg-[#F1F3F4]',
                           )}
                         >
-                          <GoogleGIcon />
+                          <span className="flex h-6 w-6 shrink-0 items-center justify-center"><GoogleGIcon className="!h-[20px] !w-[20px]" /></span>
                           Search
                         </button>
                       </motion.div>
@@ -2245,10 +2247,10 @@ export default function GeminiPromptPill({
                 <div className="relative flex items-center min-w-0">
                   <div className="flex items-center flex-wrap gap-1 w-full">
                     {chips.map(chip => (
-                      <span key={chip.label} className="inline-flex h-7 items-center gap-0.5 bg-[#D3E3FD] text-[#041e49] text-[11px] font-semibold px-2.5 rounded-lg shrink-0">
+                      <span key={chip.label} className="inline-flex h-8 items-center gap-1.5 rounded-full border border-[#B7CDF7] bg-[#D3E3FD] px-3 text-[12px] font-semibold text-[#0B57D0] shrink-0">
                         {chip.label}
                         <button type="button" onClick={e => { e.stopPropagation(); removeChip(chip.label); }} className="opacity-50 hover:opacity-100 ml-0.5">
-                          <span className="material-symbols-outlined text-[11px]">close</span>
+                          <span className="material-symbols-outlined text-[16px] leading-none">close</span>
                         </button>
                       </span>
                     ))}
@@ -2262,10 +2264,10 @@ export default function GeminiPromptPill({
                       </span>
                     ))}
                     {searchGrounding && (
-                      <button type="button" onClick={e => { e.stopPropagation(); setSearchGrounding(false); }} aria-label="Remove Google Search grounding" className={cn('inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium transition-colors', isDark ? 'border-white/15 bg-white/10 text-white/90 hover:bg-white/15' : 'border-[#DADCE0] bg-[#ECECEC] text-[#3C4043] hover:bg-[#E3E3E3]')}>
-                        <GoogleGIcon className="!h-[15px] !w-[15px]" />
+                      <button type="button" onClick={e => { e.stopPropagation(); setSearchGrounding(false); }} aria-label="Remove Google Search grounding" className={cn('inline-flex h-8 items-center gap-2 rounded-full border px-3 text-[12px] font-semibold transition-colors', isDark ? 'border-white/15 bg-white/10 text-white/90 hover:bg-white/15' : 'border-[#D1D3D7] bg-[#E6E7E9] text-[#3C4043] hover:bg-[#DCDDDF]')}>
+                        <GoogleGIcon className="!h-[19px] !w-[19px]" />
                         Search
-                        <span className="material-symbols-outlined text-[13px] leading-none text-[#5F6368]">close</span>
+                        <span className="material-symbols-outlined text-[16px] leading-none text-[#5F6368]">close</span>
                       </button>
                     )}
                     <div className="relative flex-1 min-w-[220px] min-h-6 max-h-[92px] overflow-hidden">

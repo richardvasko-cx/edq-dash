@@ -3310,7 +3310,7 @@ Is Shared IP Pool B blocked?`;
       const fm = parseFrontmatter(raw);
       const body = raw.slice(raw.indexOf('---', 3) + 3).trim();
       // Parse body back into messages array
-      const messages: {role: string, content: string, chips?: any, articles?: any, actions?: any, evidence?: any}[] = [];
+      const messages: {role: string, content: string, chips?: any, files?: any, searchGrounded?: boolean, articles?: any, actions?: any, evidence?: any}[] = [];
       const blocks = body.split(/\n(?=\*\*(User|Gemini):\*\*)/);
       for (const block of blocks) {
         const m = block.match(/^\*\*(User|Gemini):\*\*\s*([\s\S]*)/);
@@ -3321,6 +3321,18 @@ Is Shared IP Pool B blocked?`;
         try {
           const chipsArr = JSON.parse(fm.chips_json);
           messages.forEach((msg, i) => { if (chipsArr[i]) msg.chips = chipsArr[i]; });
+        } catch {}
+      }
+      if (fm.files_json) {
+        try {
+          const filesArr = JSON.parse(fm.files_json);
+          messages.forEach((msg, i) => { if (filesArr[i]) msg.files = filesArr[i]; });
+        } catch {}
+      }
+      if (fm.search_grounded_json) {
+        try {
+          const searchArr = JSON.parse(fm.search_grounded_json);
+          messages.forEach((msg, i) => { if (searchArr[i]) msg.searchGrounded = true; });
         } catch {}
       }
       if (fm.articles_json) {
@@ -3358,10 +3370,12 @@ Is Shared IP Pool B blocked?`;
         `**${m.role === 'user' ? 'User' : 'Gemini'}:** ${m.content}`
       ).join('\n\n');
       const chipsJson = JSON.stringify((messages || []).map((m: any) => m.chips ?? null));
+      const filesJson = JSON.stringify((messages || []).map((m: any) => m.files ?? null));
+      const searchGroundedJson = JSON.stringify((messages || []).map((m: any) => Boolean(m.searchGrounded)));
       const articlesJson = JSON.stringify((messages || []).map((m: any) => m.articles ?? null));
       const actionsJson = JSON.stringify((messages || []).map((m: any) => m.actions ?? null));
       const evidenceJson = JSON.stringify((messages || []).map((m: any) => m.evidence ?? null));
-      const md = `---\nid: ${convId}\ntitle: ${convTitle}\ntimestamp: ${now}\npreview: ${preview.replace(/\n/g, ' ')}\nsource: ${source || 'pill'}\nchips_json: ${chipsJson}\narticles_json: ${articlesJson}\nactions_json: ${actionsJson}\nevidence_json: ${evidenceJson}\n---\n\n${body}`;
+      const md = `---\nid: ${convId}\ntitle: ${convTitle}\ntimestamp: ${now}\npreview: ${preview.replace(/\n/g, ' ')}\nsource: ${source || 'pill'}\nchips_json: ${chipsJson}\nfiles_json: ${filesJson}\nsearch_grounded_json: ${searchGroundedJson}\narticles_json: ${articlesJson}\nactions_json: ${actionsJson}\nevidence_json: ${evidenceJson}\n---\n\n${body}`;
       fs.writeFileSync(path.join(CONV_DIR, `${convId}.md`), md, 'utf8');
       res.json({ id: convId });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
