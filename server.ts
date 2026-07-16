@@ -1427,11 +1427,56 @@ function guidePathToCard(p: string): { path: string; title: string; section: str
 // asking the model to self-report citations. This keeps the UI fast and avoids
 // fabricated provenance.
 type AnswerEvidence = {
-  kind: 'live' | 'selected' | 'guide' | 'history' | 'best_practice';
+  kind: 'live' | 'selected' | 'guide' | 'history' | 'best_practice' | 'search' | 'web';
   label: string;
   detail?: string;
   path?: string;
+  domain?: string;
+  paragraph?: number;
 };
+
+function groundedParagraphIndex(answer: string, support: any): number {
+  const paragraphs = answer.split(/\n\s*\n/).map(value => value.trim()).filter(Boolean);
+  const supportedText = String(support?.segment?.text || '').replace(/\s+/g, ' ').trim();
+  if (supportedText) {
+    const needle = supportedText.slice(0, 90).toLowerCase();
+    const found = paragraphs.findIndex(paragraph => paragraph.replace(/\s+/g, ' ').toLowerCase().includes(needle));
+    if (found >= 0) return found;
+  }
+  const endIndex = Number(support?.segment?.endIndex);
+  if (Number.isFinite(endIndex)) {
+    let cursor = 0;
+    for (let index = 0; index < paragraphs.length; index += 1) {
+      cursor = answer.indexOf(paragraphs[index], cursor);
+      if (endIndex <= cursor + paragraphs[index].length) return index;
+      cursor += paragraphs[index].length;
+    }
+  }
+  return 0;
+}
+
+function buildWebEvidence(args: { answer: string; prompt: string; sources: Array<{ label: string; path: string; index: number }>; supports: any[]; queries: string[] }): AnswerEvidence[] {
+  const { answer, prompt, sources, supports, queries } = args;
+  if (!sources.length) return [];
+  const query = String(queries[0] || prompt).replace(/\s+/g, ' ').trim().slice(0, 72);
+  const result: AnswerEvidence[] = [{ kind: 'search', label: `Search: ${query}`, detail: 'Google Search grounding' }];
+  for (const source of sources.slice(0, 8)) {
+    let paragraph = 0;
+    const matched = supports.find(support => (support?.groundingChunkIndices || []).includes(source.index));
+    if (matched) paragraph = groundedParagraphIndex(answer, matched);
+    let domain = '';
+    try { domain = new URL(source.path).hostname.replace(/^www\./, ''); } catch { /* keep empty */ }
+    result.push({ kind: 'web', label: source.label, path: source.path, detail: domain, domain, paragraph });
+  }
+  return result;
+}
+
+function buildVisibleThinkingSummary(prompt: string, screenText: string): string {
+  const focus = String(prompt || 'the request').replace(/\s+/g, ' ').trim().replace(/[?.!]+$/, '').slice(0, 90);
+  const view = screenText.match(/^Currently viewing:\s*(.+)$/mi)?.[1]?.trim();
+  const history = /30-DAY|historical metrics|ticket history/i.test(screenText) ? 'historical metrics' : 'available case data';
+  return `Checking ${focus}${view ? ` in ${view}` : ''} against the ${history} and the most relevant account signals.`;
+}
 
 function buildAnswerEvidence(args: {
   ticketRef?: any;
@@ -2659,7 +2704,9 @@ Return ONLY the answer in Markdown. Do not add a "SUGGESTIONS" section.`;
       // Stream from Gemini API
       let fullText = '';
       let thoughtSummary = '';
-      const searchEvidence: Array<{ label: string; path: string }> = [];
+      const searchEvidence: Array<{ label: string; path: string; index: number }> = [];
+      const searchSupports: any[] = [];
+      const searchQueries: string[] = [];
       try {
         // Interactions streams displayable thought summaries when the selected
         // Gemini model provides them alongside answer tokens.
@@ -2675,7 +2722,7 @@ Return ONLY the answer in Markdown. Do not add a "SUGGESTIONS" section.`;
           model: activeGeminiModel,
           contents: `USER REQUEST:\n${String(prompt).slice(0, 800)}\n\nSCREEN CONTEXT:\n${screenText.slice(0, 1800)}`,
           config: {
-            systemInstruction: 'Write one concise, user-facing analysis summary of the evidence you will weigh before answering. Do not answer the request, reveal private chain-of-thought, use markdown, or exceed 24 words.',
+            systemInstruction: 'Write one concise, user-facing analysis summary specific to this exact request and screen. Name the actual diagnostic focus and one concrete screen signal or timeframe. Do not use generic phrases such as "evidence will include", "current status", or "desired volume". Do not answer the request, reveal private chain-of-thought, use markdown, or exceed 24 words.',
             temperature: 0.1,
             maxOutputTokens: 48,
             thinkingConfig: { thinkingBudget: 0 },
@@ -2711,10 +2758,14 @@ Return ONLY the answer in Markdown. Do not add a "SUGGESTIONS" section.`;
           });
           for await (const chunk of responseStream) {
             const metadata = (chunk as any).candidates?.[0]?.groundingMetadata;
+            for (const query of metadata?.webSearchQueries || []) {
+              if (query && !searchQueries.includes(query)) searchQueries.push(query);
+            }
+            for (const support of metadata?.groundingSupports || []) searchSupports.push(support);
             for (const groundedChunk of metadata?.groundingChunks || []) {
               const web = groundedChunk?.web;
               if (web?.uri && !searchEvidence.some(item => item.path === web.uri)) {
-                searchEvidence.push({ label: web.title || 'Google Search result', path: web.uri });
+                searchEvidence.push({ label: web.title || 'Google Search result', path: web.uri, index: searchEvidence.length });
               }
             }
             const deltaText = String(chunk.text || '');
@@ -2807,9 +2858,10 @@ Return ONLY the answer in Markdown. Do not add a "SUGGESTIONS" section.`;
         usedSourceKeys: attested.usedSourceKeys,
       });
       if (googleSearch) {
-        for (const source of searchEvidence.slice(0, 8)) {
-          evidence.push({ kind: 'best_practice', label: source.label, detail: 'Google Search grounding', path: source.path });
-        }
+        evidence.push(...buildWebEvidence({ answer: finalText, prompt: String(prompt), sources: searchEvidence, supports: searchSupports, queries: searchQueries }));
+      }
+      if (!thoughtSummary.trim() || /evidence will include|current .*status.*historical|desired .*volume|available evidence/i.test(thoughtSummary)) {
+        thoughtSummary = buildVisibleThinkingSummary(String(prompt), screenText);
       }
       const thinking = thoughtSummary
         .split(/\n+/)

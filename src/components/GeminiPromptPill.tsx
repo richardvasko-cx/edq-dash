@@ -1420,6 +1420,8 @@ export default function GeminiPromptPill({
                                       inlineActions={entry.actions}
                                       onRunAction={onRunAction}
                                       isDark={isDark}
+                                      webCitations={entry.evidence?.filter(item => item.kind === 'web')}
+                                      sourceTargetId={`pill-sources-${i}`}
                                     />
                                   </>
                                 ) : (
@@ -1431,6 +1433,8 @@ export default function GeminiPromptPill({
                                       inlineActions={entry.actions}
                                       onRunAction={onRunAction}
                                       isDark={isDark}
+                                      webCitations={entry.evidence?.filter(item => item.kind === 'web')}
+                                      sourceTargetId={`pill-sources-${i}`}
                                     />
                                   </div>
                                 )}
@@ -1450,7 +1454,7 @@ export default function GeminiPromptPill({
                                     <span className="material-symbols-outlined text-[15px]">autorenew</span> Switch to {entry.suggestedModel.label}
                                   </button>
                                 )}
-                                <SourcesPill evidence={entry.evidence} isDark={isDark} onOpenArticle={onOpenArticle} />
+                                <SourcesPill evidence={entry.evidence} isDark={isDark} onOpenArticle={onOpenArticle} sourceId={`pill-sources-${i}`} />
                                 <SuggestedArticlesPill articles={entry.articles} isDark={isDark} onOpenArticle={(path) => onOpenArticle ? onOpenArticle(path) : handleSplitscreen()} />
                                 {entry.followups && entry.followups.length > 0 && (
                                   <div className="mt-2 ml-[22px] flex flex-col gap-1.5" style={{ width: 'calc(100% - 22px)' }}>
@@ -2241,7 +2245,7 @@ export default function GeminiPromptPill({
                 <div className="relative flex items-center min-w-0">
                   <div className="flex items-center flex-wrap gap-1 w-full">
                     {chips.map(chip => (
-                      <span key={chip.label} className="inline-flex items-center gap-0.5 bg-[#D3E3FD] text-[#041e49] text-[11px] font-semibold px-2 py-0.5 rounded-lg shrink-0">
+                      <span key={chip.label} className="inline-flex h-7 items-center gap-0.5 bg-[#D3E3FD] text-[#041e49] text-[11px] font-semibold px-2.5 rounded-lg shrink-0">
                         {chip.label}
                         <button type="button" onClick={e => { e.stopPropagation(); removeChip(chip.label); }} className="opacity-50 hover:opacity-100 ml-0.5">
                           <span className="material-symbols-outlined text-[11px]">close</span>
@@ -2249,7 +2253,7 @@ export default function GeminiPromptPill({
                       </span>
                     ))}
                     {files.map(file => (
-                      <span key={file.name} className="inline-flex items-center gap-0.5 bg-[#D3E3FD] text-[#041e49] text-[11px] font-semibold px-2 py-0.5 rounded-lg shrink-0 max-w-[140px]">
+                      <span key={file.name} className="inline-flex h-7 items-center gap-0.5 bg-[#D3E3FD] text-[#041e49] text-[11px] font-semibold px-2.5 rounded-lg shrink-0 max-w-[140px]">
                         <span className="material-symbols-outlined text-[11px] shrink-0">attach_file</span>
                         <span className="truncate">{file.name}</span>
                         <button type="button" onClick={e => { e.stopPropagation(); removeFile(file.name); }} className="opacity-50 hover:opacity-100 ml-0.5 shrink-0">
@@ -2258,8 +2262,8 @@ export default function GeminiPromptPill({
                       </span>
                     ))}
                     {searchGrounding && (
-                      <button type="button" onClick={e => { e.stopPropagation(); setSearchGrounding(false); }} aria-label="Remove Google Search grounding" className={cn('inline-flex h-6 items-center gap-1.5 rounded-full border px-2 text-[11px] font-medium shadow-sm transition-colors', isDark ? 'border-white/15 bg-white/10 text-white/90 hover:bg-white/15' : 'border-[#DADCE0] bg-[#F1F3F4] text-[#3C4043] hover:bg-[#E8EAED]')}>
-                        <GoogleGIcon className="!h-[14px] !w-[14px]" />
+                      <button type="button" onClick={e => { e.stopPropagation(); setSearchGrounding(false); }} aria-label="Remove Google Search grounding" className={cn('inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium transition-colors', isDark ? 'border-white/15 bg-white/10 text-white/90 hover:bg-white/15' : 'border-[#DADCE0] bg-[#ECECEC] text-[#3C4043] hover:bg-[#E3E3E3]')}>
+                        <GoogleGIcon className="!h-[15px] !w-[15px]" />
                         Search
                         <span className="material-symbols-outlined text-[13px] leading-none text-[#5F6368]">close</span>
                       </button>
@@ -2271,7 +2275,7 @@ export default function GeminiPromptPill({
                         </span>
                       ) : (
                         <>
-                      {inlineSuggestion && (
+                      {inlineSuggestion && chips.length === 0 && files.length === 0 && !searchGrounding && (
                         <div aria-hidden="true" className={cn('pointer-events-none absolute inset-0 min-w-0 overflow-hidden whitespace-pre-wrap break-words text-[15px] leading-6', isDark ? 'text-white/35' : 'text-[#70757a]')}>
                           <span className="invisible">{inputText}</span>
                           <span>{inlineSuggestion}</span>
@@ -2323,7 +2327,7 @@ export default function GeminiPromptPill({
                     </div>
                   </div>
                   {/* Drag-and-drop overlay inside input area */}
-                  {!isLoading && !inputText && chips.length === 0 && files.length === 0 && (
+                  {!isLoading && !inputText && chips.length === 0 && files.length === 0 && !searchGrounding && (
                     <span className={cn(
                       'absolute left-0 text-[15px] leading-6 pointer-events-none whitespace-nowrap select-none',
                       isDraggingFile

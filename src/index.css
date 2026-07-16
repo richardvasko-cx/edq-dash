@@ -1434,3 +1434,29 @@ button.app-action-inline-chip:active {
 .md3-state-layer:active::before {
   opacity: 0.10;
 }
+
+.web-citation-cluster {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: -4px;
+  min-height: 22px;
+  margin-left: 6px;
+  padding: 2px 7px;
+  border: 0;
+  border-radius: 999px;
+  background: #eef0f2;
+  cursor: pointer;
+  transition: background-color 140ms ease;
+}
+.web-citation-cluster:hover { background: #e1e5e9; }
+.web-citation-icon-wrap { position:relative; display:inline-flex; width:16px; height:16px; align-items:center; justify-content:center; border:2px solid #eef0f2; border-radius:50%; background:white; overflow:hidden; }
+.web-citation-icon-wrap + .web-citation-icon-wrap { margin-left:-5px; }
+.web-citation-fallback { position:absolute; font-size:12px; color:#80868b; }
+.web-citation-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: white;
+  object-fit: contain;
+}
+.web-citation-cluster:hover .web-citation-icon-wrap { border-color: #e1e5e9; }

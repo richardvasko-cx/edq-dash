@@ -21,6 +21,43 @@ interface Props {
   inlineActions?: InlineAppAction[];
   onRunAction?: (action: InlineAppAction) => void;
   isDark?: boolean;
+  webCitations?: Array<{ label: string; path?: string; domain?: string; paragraph?: number }>;
+  sourceTargetId?: string;
+}
+
+function sourceDomain(item: { path?: string; domain?: string }) {
+  if (item.domain) return item.domain.replace(/^www\./, '');
+  try { return new URL(item.path || '').hostname.replace(/^www\./, ''); } catch { return ''; }
+}
+
+function escapeAttribute(value: string) {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function injectParagraphSources(
+  html: string,
+  citations: Array<{ label: string; path?: string; domain?: string; paragraph?: number }>,
+  sourceTargetId?: string,
+) {
+  if (!citations.length || !sourceTargetId) return html;
+  const byParagraph = new Map<number, typeof citations>();
+  citations.forEach(item => {
+    const paragraph = Math.max(0, Number.isFinite(item.paragraph) ? Number(item.paragraph) : 0);
+    const current = byParagraph.get(paragraph) || [];
+    if (!current.some(existing => (existing.path || existing.domain) === (item.path || item.domain))) current.push(item);
+    byParagraph.set(paragraph, current);
+  });
+  let paragraphIndex = 0;
+  return html.replace(/<p>([\s\S]*?)<\/p>/g, (_match, body: string) => {
+    const items = (byParagraph.get(paragraphIndex++) || []).slice(0, 3);
+    if (!items.length) return `<p>${body}</p>`;
+    const icons = items.map((item, index) => {
+      const domain = sourceDomain(item);
+      const src = `https://www.google.com/s2/favicons?sz=32&domain_url=${encodeURIComponent(item.path || domain)}`;
+      return `<span class="web-citation-icon-wrap" style="z-index:${items.length - index}"><span class="material-symbols-outlined web-citation-fallback">language</span><img class="web-citation-icon" src="${escapeAttribute(src)}" alt="" title="${escapeAttribute(item.label)}" onerror="this.style.display='none'" /></span>`;
+    }).join('');
+    return `<p>${body}<button type="button" class="web-citation-cluster" data-source-target="${escapeAttribute(sourceTargetId)}" aria-label="View web sources">${icons}</button></p>`;
+  });
 }
 
 function escapeRegExp(value: string) {
@@ -78,12 +115,21 @@ function injectActionButtons(html: string, actions: InlineAppAction[] = []) {
   }).join('');
 }
 
-export default function MarkdownContent({ content, className, inlineActions = [], onRunAction, isDark }: Props) {
+export default function MarkdownContent({ content, className, inlineActions = [], onRunAction, isDark, webCitations = [], sourceTargetId }: Props) {
   if (!content) return null;
 
   // Split by code blocks of type ```json or ```chart
   const parts = content.split(/(```(?:json|chart)[\s\S]*?```)/g);
   const handleClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    const sourceJump = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-source-target]');
+    if (sourceJump?.dataset.sourceTarget) {
+      event.preventDefault();
+      event.stopPropagation();
+      const sourceId = sourceJump.dataset.sourceTarget;
+      window.dispatchEvent(new CustomEvent('edq:open-sources', { detail: { sourceId } }));
+      requestAnimationFrame(() => document.getElementById(sourceId)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+      return;
+    }
     const target = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-app-action-id]');
     if (!target) return;
     const action = inlineActions.find(item => item.id === target.dataset.appActionId);
@@ -113,7 +159,7 @@ export default function MarkdownContent({ content, className, inlineActions = []
           <div
             key={index}
             className="prose-custom max-w-none"
-            dangerouslySetInnerHTML={{ __html: injectActionButtons(marked.parse(part) as string, inlineActions) }}
+            dangerouslySetInnerHTML={{ __html: injectParagraphSources(injectActionButtons(marked.parse(part) as string, inlineActions), webCitations, sourceTargetId) }}
           />
         );
       })}

@@ -17,10 +17,12 @@ export interface GuideArticle {
 }
 
 export interface AnswerEvidence {
-  kind: 'live' | 'selected' | 'guide' | 'history' | 'best_practice';
+  kind: 'live' | 'selected' | 'guide' | 'history' | 'best_practice' | 'search' | 'web';
   label: string;
   detail?: string;
   path?: string;
+  domain?: string;
+  paragraph?: number;
 }
 
 export interface AppAction {
@@ -156,30 +158,66 @@ function evidenceIcon(item: AnswerEvidence): string {
   return /ticket|case/i.test(item.label) ? 'confirmation_number' : 'dashboard';
 }
 
+function evidenceDomain(item: AnswerEvidence) {
+  if (item.domain) return item.domain.replace(/^www\./, '');
+  try { return new URL(item.path || '').hostname.replace(/^www\./, ''); } catch { return ''; }
+}
+
+function SiteFavicon({ item }: { item: AnswerEvidence }) {
+  const domain = evidenceDomain(item);
+  const target = item.path || domain;
+  return (
+    <span className="relative flex h-[18px] w-[18px] shrink-0 items-center justify-center">
+      <span className="material-symbols-outlined absolute text-[16px] text-[#80868B]">language</span>
+      <img className="relative z-[1] h-[18px] w-[18px] rounded-[4px] bg-white object-contain" src={`https://www.google.com/s2/favicons?sz=32&domain_url=${encodeURIComponent(target)}`} alt="" onError={event => { event.currentTarget.style.display = 'none'; }} />
+    </span>
+  );
+}
+
 /** A compact provenance control. Evidence comes from the server's grounding plan,
  * not a second model call, so opening this never adds latency or quota cost. */
-export function SourcesPill({ evidence, isDark, onOpenArticle }: { evidence?: AnswerEvidence[]; isDark: boolean; onOpenArticle?: (path: string) => void }) {
+export function SourcesPill({ evidence, isDark, onOpenArticle, sourceId }: { evidence?: AnswerEvidence[]; isDark: boolean; onOpenArticle?: (path: string) => void; sourceId?: string }) {
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const listener = (event: Event) => {
+      const requested = (event as CustomEvent<{ sourceId?: string }>).detail?.sourceId;
+      if (!sourceId || requested !== sourceId) return;
+      setOpen(true);
+      requestAnimationFrame(() => document.getElementById(sourceId)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+    };
+    window.addEventListener('edq:open-sources', listener);
+    return () => window.removeEventListener('edq:open-sources', listener);
+  }, [sourceId]);
   if (!evidence?.length) return null;
+  const visibleEvidence = evidence.filter((item, index, items) =>
+    index === items.findIndex(other => (item.path && other.path === item.path) || (!item.path && other.kind === item.kind && other.label === item.label))
+  ).slice(0, 9);
+  const openItem = (item: AnswerEvidence) => {
+    if (!item.path) return;
+    if (item.kind === 'web' || /^https?:\/\//i.test(item.path)) window.open(item.path, '_blank', 'noopener,noreferrer');
+    else onOpenArticle?.(item.path);
+  };
   return (
-    <div className="relative mt-2 ml-[22px]" style={{ width: 'calc(100% - 22px)' }}>
+    <div id={sourceId} className="relative mt-3 ml-[22px] scroll-mt-24" style={{ width: 'calc(100% - 22px)' }}>
       <button type="button" onClick={() => setOpen(value => !value)} aria-expanded={open}
-        className={cn('flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold transition-colors', isDark ? 'border-white/10 bg-white/5 text-white/55 hover:bg-white/10 hover:text-white/80' : 'border-black/8 bg-[#F8F9FA] text-[#5F6368] hover:bg-[#E8F0FE] hover:text-[#0B57D0]')}>
-        <span className="material-symbols-outlined text-[13px]">verified</span>
+        className={cn('flex h-9 items-center gap-2 rounded-full border px-3 text-[11px] font-semibold transition-colors', isDark ? 'border-white/10 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/85' : 'border-[#DADCE0] bg-[#F8F9FA] text-[#5F6368] hover:bg-[#EEF2F7]')}>
+        <span className="material-symbols-outlined text-[18px]">verified</span>
         <span>Sources</span>
-        <span className={cn('material-symbols-outlined text-[13px] transition-transform', open && 'rotate-180')}>expand_more</span>
+        <span className={cn('material-symbols-outlined text-[16px] transition-transform', open && 'rotate-180')}>expand_more</span>
       </button>
       <AnimatePresence initial={false}>
         {open && (
-          <motion.div initial={{ opacity: 0, y: -4, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, y: -4, height: 0 }} transition={{ duration: 0.16 }} className="mt-2 overflow-hidden">
-            <div className="border-t border-dashed border-[#1A73E8]/60">
-              {evidence.map((item, index) => item.path && onOpenArticle ? (
-                <button key={`${item.kind}-${item.label}-${index}`} type="button" onClick={() => onOpenArticle(item.path!)} className={cn('flex w-full items-center gap-2 border-b border-dashed border-[#1A73E8]/45 px-2 py-2.5 text-left transition-colors', isDark ? 'hover:bg-white/5' : 'hover:bg-[#E8F0FE]/45')}>
-                  <span className="material-symbols-outlined text-[14px] text-[#1A73E8]">{evidenceIcon(item)}</span><span className="min-w-0 flex-1 truncate text-[11px] font-semibold">{item.label}</span>
-                </button>
-              ) : (
-                <div key={`${item.kind}-${item.label}-${index}`} className="flex items-center gap-2 border-b border-dashed border-[#1A73E8]/45 px-2 py-2.5"><span className="material-symbols-outlined text-[14px] text-[#1A73E8]">{evidenceIcon(item)}</span><span className="min-w-0 flex-1 text-[11px] font-semibold">{item.label}</span></div>
-              ))}
+          <motion.div initial={{ opacity: 0, y: -4, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, y: -4, height: 0 }} transition={{ duration: 0.16 }} className="mt-3 overflow-hidden">
+            <div className="grid max-h-[118px] auto-rows-[34px] grid-cols-1 gap-x-6 gap-y-2 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
+              {visibleEvidence.map((item, index) => {
+                const clickable = Boolean(item.path);
+                const content = <>
+                  {item.kind === 'search' ? <GoogleGIcon className="!h-[18px] !w-[18px] shrink-0" /> : item.kind === 'web' ? <SiteFavicon item={item} /> : <span className="material-symbols-outlined shrink-0 text-[18px] text-[#80868B]">{evidenceIcon(item)}</span>}
+                  <span className={cn('min-w-0 flex-1 truncate rounded-full px-2.5 py-1.5 text-[10px] font-medium', isDark ? 'bg-white/8 text-white/70' : 'bg-[#ECECEC] text-[#5F6368]')} title={item.label}>{item.kind === 'search' && !/^Search:/i.test(item.label) ? `Search: ${item.label}` : item.label}</span>
+                </>;
+                if (item.kind === 'web' && item.path) return <a key={`${item.kind}-${item.label}-${index}`} href={item.path} target="_blank" rel="noreferrer" className="flex min-w-0 items-center gap-2 text-left" title={item.path}>{content}</a>;
+                return clickable ? <button key={`${item.kind}-${item.label}-${index}`} type="button" onClick={() => openItem(item)} className="flex min-w-0 items-center gap-2 text-left">{content}</button> : <div key={`${item.kind}-${item.label}-${index}`} className="flex min-w-0 items-center gap-2">{content}</div>;
+              })}
             </div>
           </motion.div>
         )}
@@ -194,19 +232,18 @@ export function SuggestedArticlesPill({ articles, isDark, onOpenArticle }: { art
   return (
     <div className="relative mt-1.5 ml-[22px]" style={{ width: 'calc(100% - 22px)' }}>
       <button type="button" onClick={() => setOpen(value => !value)} aria-expanded={open}
-        className={cn('flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold transition-colors', isDark ? 'border-white/10 bg-white/5 text-white/55 hover:bg-white/10 hover:text-white/80' : 'border-black/8 bg-[#F8F9FA] text-[#5F6368] hover:bg-[#E8F0FE] hover:text-[#0B57D0]')}>
-        <span className="material-symbols-outlined text-[14px]">menu_book</span>
+        className={cn('flex h-9 items-center gap-2 rounded-full border px-3 text-[11px] font-semibold transition-colors', isDark ? 'border-white/10 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/85' : 'border-[#DADCE0] bg-[#F8F9FA] text-[#5F6368] hover:bg-[#EEF2F7]')}>
+        <span className="material-symbols-outlined text-[18px] text-[#80868B]">menu_book</span>
         <span>Suggested articles · {articles.length}</span>
         <span className={cn('material-symbols-outlined text-[13px] transition-transform', open && 'rotate-180')}>expand_more</span>
       </button>
       <AnimatePresence initial={false}>
         {open && (
-          <motion.div initial={{ opacity: 0, y: -4, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, y: -4, height: 0 }} transition={{ duration: 0.16 }} className="mt-2 overflow-hidden border-t border-dashed border-[#1A73E8]/60">
+          <motion.div initial={{ opacity: 0, y: -4, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, y: -4, height: 0 }} transition={{ duration: 0.16 }} className="mt-2 grid max-h-[126px] grid-cols-1 gap-2 overflow-hidden sm:grid-cols-2 xl:grid-cols-3">
             {articles.slice(0, 3).map(article => (
-              <button key={article.path} type="button" onClick={() => onOpenArticle(article.path)} className={cn('flex w-full items-center gap-2 border-b border-dashed border-[#1A73E8]/45 px-2 py-2.5 text-left transition-colors', isDark ? 'hover:bg-white/5' : 'hover:bg-[#E8F0FE]/45')}>
-                <span className="material-symbols-outlined shrink-0 text-[14px] text-[#1A73E8]">menu_book</span>
-                <span className="min-w-0 flex-1"><span className="block truncate text-[11px] font-semibold">{article.title}</span><span className={cn('block truncate text-[9px]', isDark ? 'text-white/40' : 'text-black/40')}>{article.section}</span></span>
-                <span className="material-symbols-outlined text-[14px] text-[#1A73E8]">arrow_outward</span>
+              <button key={article.path} type="button" onClick={() => onOpenArticle(article.path)} className={cn('flex min-w-0 items-center gap-2 rounded-lg px-1 py-1 text-left transition-colors', isDark ? 'hover:bg-white/5' : 'hover:bg-[#EEF2F7]')}>
+                <span className="material-symbols-outlined shrink-0 text-[18px] text-[#80868B]">menu_book</span>
+                <span className={cn('min-w-0 flex-1 truncate rounded-full px-2.5 py-1.5 text-[10px] font-medium', isDark ? 'bg-white/8 text-white/70' : 'bg-[#ECECEC] text-[#5F6368]')} title={`${article.title} · ${article.section}`}>{article.title}</span>
               </button>
             ))}
           </motion.div>
@@ -1134,6 +1171,8 @@ export default function AiPanel({ isDark, isDraggingFile = false, screenContext,
                               inlineActions={msg.actions}
                               onRunAction={onRunAction}
                               isDark={isDark}
+                              webCitations={msg.evidence?.filter(item => item.kind === 'web')}
+                              sourceTargetId={`ai-sources-${i}`}
                             />
                           </>
                         ) : (
@@ -1145,6 +1184,8 @@ export default function AiPanel({ isDark, isDraggingFile = false, screenContext,
                               inlineActions={msg.actions}
                               onRunAction={onRunAction}
                               isDark={isDark}
+                              webCitations={msg.evidence?.filter(item => item.kind === 'web')}
+                              sourceTargetId={`ai-sources-${i}`}
                             />
                           </div>
                         )}
@@ -1164,7 +1205,7 @@ export default function AiPanel({ isDark, isDraggingFile = false, screenContext,
                             <span className="material-symbols-outlined text-[15px]">autorenew</span> Switch to {msg.suggestedModel.label}
                           </button>
                         )}
-                        <SourcesPill evidence={msg.evidence} isDark={isDark} onOpenArticle={onOpenArticle} />
+                        <SourcesPill evidence={msg.evidence} isDark={isDark} onOpenArticle={onOpenArticle} sourceId={`ai-sources-${i}`} />
                         <SuggestedArticlesPill articles={(msg.articles?.length ? msg.articles : (msg.article ? [msg.article] : [])).slice(0, 3)} isDark={isDark} onOpenArticle={onOpenArticle} />
                         {msg.followups && msg.followups.length > 0 && (
                           <div className="mt-2 ml-[22px] flex flex-col gap-1.5" style={{ width: 'calc(100% - 22px)' }}>
@@ -1670,13 +1711,13 @@ export default function AiPanel({ isDark, isDraggingFile = false, screenContext,
                 {(panelFiles.length > 0 || searchGrounding) && (
                   <div className="flex flex-wrap gap-1 mb-1">
                     {searchGrounding && (
-                      <button type="button" onClick={() => setSearchGrounding(false)} aria-label="Remove Google Search grounding" className={cn('inline-flex h-6 items-center gap-1.5 rounded-full border px-2 text-[11px] font-medium shadow-sm transition-colors', isDark ? 'border-white/15 bg-white/10 text-white/90 hover:bg-white/15' : 'border-[#DADCE0] bg-[#F1F3F4] text-[#3C4043] hover:bg-[#E8EAED]')}>
-                        <GoogleGIcon className="!h-[14px] !w-[14px]" /> Search
+                      <button type="button" onClick={() => setSearchGrounding(false)} aria-label="Remove Google Search grounding" className={cn('inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium transition-colors', isDark ? 'border-white/15 bg-white/10 text-white/90 hover:bg-white/15' : 'border-[#DADCE0] bg-[#ECECEC] text-[#3C4043] hover:bg-[#E3E3E3]')}>
+                        <GoogleGIcon className="!h-[15px] !w-[15px]" /> Search
                         <span className="material-symbols-outlined text-[13px] leading-none text-[#5F6368]">close</span>
                       </button>
                     )}
                     {panelFiles.map(file => (
-                      <span key={file.name} className="inline-flex items-center gap-0.5 bg-[#D3E3FD] text-[#041e49] text-[11px] font-semibold px-2 py-0.5 rounded-lg shrink-0 max-w-[160px]">
+                      <span key={file.name} className="inline-flex h-7 items-center gap-0.5 bg-[#D3E3FD] text-[#041e49] text-[11px] font-semibold px-2.5 rounded-lg shrink-0 max-w-[160px]">
                         <span className="material-symbols-outlined text-[11px] shrink-0">attach_file</span>
                         <span className="truncate">{file.name}</span>
                         <button type="button" onClick={() => removePanelFile(file.name)} className="opacity-50 hover:opacity-100 ml-0.5 shrink-0">
@@ -1694,7 +1735,7 @@ export default function AiPanel({ isDark, isDraggingFile = false, screenContext,
                   </span>
                 ) : (
                   <>
-                {inlineSuggestion && (
+                {inlineSuggestion && panelFiles.length === 0 && !searchGrounding && (
                   <div aria-hidden="true" className={cn('pointer-events-none absolute inset-0 min-w-0 overflow-hidden whitespace-pre-wrap break-words text-[13px] leading-5', isDark ? 'text-white/35' : 'text-[#70757a]')}>
                     <span className="invisible">{input}</span>
                     <span>{inlineSuggestion}</span>
@@ -1722,7 +1763,7 @@ export default function AiPanel({ isDark, isDraggingFile = false, screenContext,
                   rows={1}
                   autoComplete="off"
                   className={cn('relative z-10 block h-5 min-h-5 max-h-[92px] w-full min-w-0 resize-none overflow-hidden bg-transparent outline-none text-[13px] leading-5 caret-[#1A73E8]', t.inputText)}
-                  placeholder={isDraggingFile ? 'Drag & drop here' : 'Ask Gemini or type to search'}
+                  placeholder={isDraggingFile ? 'Drag & drop here' : (panelFiles.length > 0 || searchGrounding ? '' : 'Ask Gemini or type to search')}
                   value={input}
                   onChange={e => updateInput(e.target.value)}
                   onKeyDown={e => {
